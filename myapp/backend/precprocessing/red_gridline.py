@@ -16,28 +16,27 @@ def remove_redacted_area(img, intensity_threshold=5):
 
     return cropped_img
 
-
-def remove_gridlines_and_background(img, threshold=0.94):
+def remove_gridlines_and_background(img):
     """
-    Removes ECG gridlines and background by extracting the red channel,
-    converting to grayscale, and applying intensity thresholding.
+    Improved gridline removal for real ECG scans.
     """
 
-    # Extract red channel (OpenCV uses BGR)
-    red_channel = img[:, :, 2]
+    # Extract red channel
+    red = img[:, :, 2]
 
-    # Normalize to [0, 1]
-    red_norm = red_channel / 255.0
+    # Normalize
+    red_norm = red / 255.0
 
-    # Thresholding
-    _, binary = cv2.threshold(
-        red_norm, threshold, 1.0, cv2.THRESH_BINARY_INV
-    )
+    # Blur to suppress grid texture
+    red_blur = cv2.GaussianBlur(red_norm, (5, 5), 0)
 
-    # Convert to uint8 image
+    # Threshold (tuned for real ECG scans)
+    binary = red_blur < 0.85   # <-- key change
+
     binary = (binary * 255).astype(np.uint8)
 
     return binary
+
 
 if __name__ == "__main__":
 
