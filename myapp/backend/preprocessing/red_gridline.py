@@ -40,7 +40,7 @@ def remove_gridlines_and_background(img):
 
 if __name__ == "__main__":
 
-    image_path = "image.png"   # update if needed
+    image_path = "image.jpeg"   # update if needed
     img = cv2.imread(image_path)
 
     if img is None:
