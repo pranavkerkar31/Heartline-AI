@@ -21,3 +21,10 @@ Thumbs.db
 
 # Local test images (optional)
 test_images/
+
+# Raw ECG data (WFDB)
+*.dat
+*.hea
+*.atr
+*.qrs
+*.xml

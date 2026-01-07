@@ -38,7 +38,7 @@ def remove_gridlines_and_background(img):
     return binary
 
 if __name__ == "__main__":
-    image_path = "trial1.png"  # Replace with your second image filename
+    image_path = "image.png"  # Replace with your second image filename
     img = cv2.imread(image_path)
 
     if img is None:
