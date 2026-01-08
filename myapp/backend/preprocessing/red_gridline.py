@@ -2,71 +2,95 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 
-def remove_redacted_area(img, intensity_threshold=5):
-    """
-    Removes black/redacted regions using row-wise average pixel intensity.
-    """
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    row_mean_intensity = np.mean(gray, axis=1)
-    valid_rows = row_mean_intensity > intensity_threshold
-    cropped_img = img[valid_rows, :]
-    return cropped_img
 
-def remove_gridlines_and_background(img):
-    """
-    Gridline removal adapted for white-background ECGs with pink/red grids.
-    Keeps black ECG signal and lead names visible.
-    """
-    # Extract red channel (grid is prominent here)
-    red = img[:, :, 2]
-    red_norm = red / 255.0
+# -------------------- LOAD IMAGE --------------------
+img = cv2.imread("image.png")
+if img is None:
+    raise FileNotFoundError("ECG image not found")
 
-    # Stronger blur to smooth out fine grid texture while preserving thicker black lines/text
-    red_blur = cv2.GaussianBlur(red_norm, (9, 9), 0)
+rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-    # Keep mid-range values where gridlines typically sit (pink/red on white ≈ 0.6–0.95 in red channel)
-    # Adjust these if needed for your specific scans
-    grid_mask = (red_blur > 0.55) & (red_blur < 0.96)
 
-    # Invert: black signal/text becomes 255, background and grid become 0
-    binary = np.where(grid_mask, 0, 255).astype(np.uint8)
+# -------------------- GRAYSCALE --------------------
+gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # Optional: morphological closing to fill small gaps in traces/text
-    kernel = np.ones((3,3), np.uint8)
-    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
 
-    return binary
+# -------------------- REMOVE GRID TEXTURE (BLACK-HAT) --------------------
+# Suppresses repetitive grid background while keeping ECG trace
+bh_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 25))
+blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, bh_kernel)
 
-if __name__ == "__main__":
-    image_path = "image.png"  # Replace with your second image filename
-    img = cv2.imread(image_path)
+# Normalize to full range
+blackhat = cv2.normalize(blackhat, None, 0, 255, cv2.NORM_MINMAX)
 
-    if img is None:
-        raise ValueError("Image not found. Check the path.")
 
-    # Step 1: Remove redacted area (if any black bars at top/bottom)
-    img_no_redaction = remove_redacted_area(img)
+# -------------------- BINARIZE ECG TRACE --------------------
+_, bw = cv2.threshold(
+    blackhat,
+    0,
+    255,
+    cv2.THRESH_BINARY + cv2.THRESH_OTSU
+)
 
-    # Step 2: Remove gridlines & background
-    binary_ecg = remove_gridlines_and_background(img_no_redaction)
 
-    # Display results
-    plt.figure(figsize=(15, 5))
+# -------------------- REMOVE GRID LINES (CRITICAL STEP) --------------------
+# Detect horizontal grid lines
+h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
+horizontal = cv2.morphologyEx(bw, cv2.MORPH_OPEN, h_kernel)
 
-    plt.subplot(1, 3, 1)
-    plt.title("Original ECG")
-    plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-    plt.axis("off")
+# Detect vertical grid lines
+v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 40))
+vertical = cv2.morphologyEx(bw, cv2.MORPH_OPEN, v_kernel)
 
-    plt.subplot(1, 3, 2)
-    plt.title("After Redacted Area Removal")
-    plt.imshow(cv2.cvtColor(img_no_redaction, cv2.COLOR_BGR2RGB))
-    plt.axis("off")
+# Combine grid lines
+grid = cv2.bitwise_or(horizontal, vertical)
 
-    plt.subplot(1, 3, 3)
-    plt.title("Binary ECG (Gridlines Removed)")
-    plt.imshow(binary_ecg, cmap="gray")
-    plt.axis("off")
+# Subtract grid from binary image
+bw = cv2.subtract(bw, grid)
 
-    plt.tight_layout()
-    plt.show()
+
+# -------------------- REMOVE SMALL NOISE --------------------
+kernel_small = np.ones((2, 2), np.uint8)
+bw = cv2.morphologyEx(bw, cv2.MORPH_OPEN, kernel_small)
+
+
+# -------------------- CONNECT ECG WAVEFORM --------------------
+# Connect broken ECG segments without restoring grid
+kernel_connect = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 1))
+bw = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, kernel_connect)
+
+
+# -------------------- FINAL OUTPUT --------------------
+# Black waveform on white background
+final = 255 - bw
+
+
+# -------------------- DISPLAY RESULTS --------------------
+plt.figure(figsize=(18, 6))
+
+plt.subplot(1, 4, 1)
+plt.imshow(rgb)
+plt.title("Original ECG")
+plt.axis("off")
+
+plt.subplot(1, 4, 2)
+plt.imshow(blackhat, cmap="gray")
+plt.title("After Black-hat (Grid Suppressed)")
+plt.axis("off")
+
+plt.subplot(1, 4, 3)
+plt.imshow(grid, cmap="gray")
+plt.title("Detected Grid Lines")
+plt.axis("off")
+
+plt.subplot(1, 4, 4)
+plt.imshow(final, cmap="gray")
+plt.title("ECG Waveform Only (FINAL)")
+plt.axis("off")
+
+plt.tight_layout()
+plt.show()
+
+
+# -------------------- SAVE OUTPUT --------------------
+cv2.imwrite("ecg_waveform_only.png", final)
