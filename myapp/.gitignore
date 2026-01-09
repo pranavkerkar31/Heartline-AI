@@ -39,3 +39,24 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Python virtual environment
+backend/venv/
+backend/ecg_yolo/venv/
+venv/
+
+# YOLO training outputs
+runs/
+
+# YOLO dataset (raw images & labels)
+backend/yolo_ecg/images/
+backend/yolo_ecg/labels/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.vscode/

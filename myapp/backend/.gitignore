@@ -28,3 +28,7 @@ test_images/
 *.atr
 *.qrs
 *.xml
+
+*.pt
+*.onnx
+*.weights
