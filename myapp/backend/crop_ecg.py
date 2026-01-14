@@ -1,81 +1,80 @@
 import cv2
+import numpy as np
 import os
 
-# -------------------- PATHS --------------------
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# ================= CONFIG =================
+PREDICT_DIR = "runs/detect/predict"
+OUTPUT_DIR = "runs/detect/cropped_ecg"
 
-PRED_IMG_DIR = os.path.join(BASE_DIR, "runs", "detect", "predict")
-PRED_LABEL_DIR = os.path.join(PRED_IMG_DIR, "labels")
-OUTPUT_DIR = os.path.join(BASE_DIR, "predicted_crops")
+LOWER_BLUE = np.array([100, 150, 50])
+UPPER_BLUE = np.array([140, 255, 255])
+
+BOX_MARGIN = 12          # removes blue border
+TOP_TEXT_RATIO = 0.04   # removes YOLO label text (8%)
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# -------------------- SETTINGS --------------------
-PADDING = 10  # pixels safety margin
+def crop_ecg_from_image(image_path, save_path):
+    img = cv2.imread(image_path)
+    if img is None:
+        print(f"[ERROR] Cannot read {image_path}")
+        return
 
-# -------------------- PROCESS IMAGES --------------------
-images = [
-    f for f in os.listdir(PRED_IMG_DIR)
-    if f.lower().endswith((".jpg", ".jpeg", ".png"))
-]
+    # Convert to HSV
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-print(f"Found {len(images)} predicted images")
+    # Detect blue bounding box
+    mask = cv2.inRange(hsv, LOWER_BLUE, UPPER_BLUE)
 
-for img_name in images:
-    img_path = os.path.join(PRED_IMG_DIR, img_name)
-    label_path = os.path.join(
-        PRED_LABEL_DIR, os.path.splitext(img_name)[0] + ".txt"
+    # Strengthen box lines
+    kernel = np.ones((5, 5), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+    contours, _ = cv2.findContours(
+        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
 
-    if not os.path.exists(label_path):
-        print(f"[SKIP] No prediction label for {img_name}")
-        continue
+    if not contours:
+        print(f"[SKIP] No blue box found in {image_path}")
+        return
 
-    img = cv2.imread(img_path)
-    if img is None:
-        print(f"[ERROR] Cannot read {img_name}")
-        continue
+    # Largest contour = ECG box
+    c = max(contours, key=cv2.contourArea)
+    x, y, w, h = cv2.boundingRect(c)
 
-    h, w = img.shape[:2]
+    # Inner crop (remove blue border)
+    x1 = max(x + BOX_MARGIN, 0)
+    y1 = max(y + BOX_MARGIN, 0)
+    x2 = min(x + w - BOX_MARGIN, img.shape[1])
+    y2 = min(y + h - BOX_MARGIN, img.shape[0])
 
-    # -------------------- READ BOXES --------------------
-    boxes = []
-    with open(label_path, "r") as f:
-        for line in f:
-            cls, x_c, y_c, bw, bh = map(float, line.strip().split())
-            boxes.append((bw * bh, x_c, y_c, bw, bh))
+    cropped = img[y1:y2, x1:x2]
 
-    if not boxes:
-        print(f"[SKIP] No boxes in {img_name}")
-        continue
+    # 🔑 Remove YOLO label text strip from top
+    top_cut = int(TOP_TEXT_RATIO * cropped.shape[0])
+    cropped = cropped[top_cut:, :]
 
-    # -------------------- KEEP LARGEST BOX --------------------
-    boxes.sort(reverse=True)
-    _, x_c, y_c, bw, bh = boxes[0]
+    cv2.imwrite(save_path, cropped)
+    print(f"[OK] Saved clean ECG: {save_path}")
 
-    # -------------------- YOLO → PIXEL COORDS --------------------
-    x1 = int((x_c - bw / 2) * w)
-    y1 = int((y_c - bh / 2) * h)
-    x2 = int((x_c + bw / 2) * w)
-    y2 = int((y_c + bh / 2) * h)
 
-    # -------------------- PADDING + CLIP --------------------
-    x1 = max(0, x1 - PADDING)
-    y1 = max(0, y1 - PADDING)
-    x2 = min(w, x2 + PADDING)
-    y2 = min(h, y2 + PADDING)
+def main():
+    images = [
+        f for f in os.listdir(PREDICT_DIR)
+        if f.lower().endswith((".jpg", ".png", ".jpeg"))
+    ]
 
-    crop = img[y1:y2, x1:x2]
+    if not images:
+        print("No images found.")
+        return
 
-    if crop.size == 0:
-        print(f"[ERROR] Empty crop for {img_name}")
-        continue
+    for img_name in images:
+        input_path = os.path.join(PREDICT_DIR, img_name)
+        output_path = os.path.join(OUTPUT_DIR, img_name)
+        crop_ecg_from_image(input_path, output_path)
 
-    # -------------------- SAVE --------------------
-    out_name = os.path.splitext(img_name)[0] + "_crop.png"
-    out_path = os.path.join(OUTPUT_DIR, out_name)
+    print("\n✅ ECG waveform extraction completed successfully.")
 
-    cv2.imwrite(out_path, crop)
-    print(f"[OK] Saved {out_name}")
 
-print("\n✅ Cropping from predictions complete.")
+if __name__ == "__main__":
+    main()
