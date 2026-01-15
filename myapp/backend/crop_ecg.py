@@ -2,79 +2,68 @@ import cv2
 import numpy as np
 import os
 
-# ================= CONFIG =================
-PREDICT_DIR = "runs/detect/predict"
-OUTPUT_DIR = "runs/detect/cropped_ecg"
+def remove_gridlines_strict(img):
+    """
+    Produces:
+    - White background
+    - Black ECG waveform
+    - Black lead names
+    - NO gridlines
+    """
 
-LOWER_BLUE = np.array([100, 150, 50])
-UPPER_BLUE = np.array([140, 255, 255])
+    # Convert to grayscale
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-BOX_MARGIN = 12          # removes blue border
-TOP_TEXT_RATIO = 0.04   # removes YOLO label text (8%)
+    # Strong blur to suppress grid texture
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-def crop_ecg_from_image(image_path, save_path):
-    img = cv2.imread(image_path)
-    if img is None:
-        print(f"[ERROR] Cannot read {image_path}")
-        return
-
-    # Convert to HSV
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-
-    # Detect blue bounding box
-    mask = cv2.inRange(hsv, LOWER_BLUE, UPPER_BLUE)
-
-    # Strengthen box lines
-    kernel = np.ones((5, 5), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-
-    contours, _ = cv2.findContours(
-        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    # Binary inverse threshold:
+    # Dark content (ECG + text) -> white
+    # Background + grid -> black
+    _, binary = cv2.threshold(
+        blur, 140, 255, cv2.THRESH_BINARY_INV
     )
 
-    if not contours:
-        print(f"[SKIP] No blue box found in {image_path}")
-        return
+    # Remove thin grid remnants using morphology
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    clean = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=2)
 
-    # Largest contour = ECG box
-    c = max(contours, key=cv2.contourArea)
-    x, y, w, h = cv2.boundingRect(c)
+    # Fill gaps in ECG waveform
+    clean = cv2.morphologyEx(clean, cv2.MORPH_CLOSE, kernel, iterations=2)
 
-    # Inner crop (remove blue border)
-    x1 = max(x + BOX_MARGIN, 0)
-    y1 = max(y + BOX_MARGIN, 0)
-    x2 = min(x + w - BOX_MARGIN, img.shape[1])
-    y2 = min(y + h - BOX_MARGIN, img.shape[0])
+    # Convert to final format:
+    # ECG -> black, background -> white
+    final = cv2.bitwise_not(clean)
 
-    cropped = img[y1:y2, x1:x2]
-
-    # 🔑 Remove YOLO label text strip from top
-    top_cut = int(TOP_TEXT_RATIO * cropped.shape[0])
-    cropped = cropped[top_cut:, :]
-
-    cv2.imwrite(save_path, cropped)
-    print(f"[OK] Saved clean ECG: {save_path}")
+    return final
 
 
-def main():
+# ---------------- MAIN ----------------
+if __name__ == "__main__":
+
+    INPUT_DIR = "runs/detect/cropped_ecg"
+    OUTPUT_DIR = "runs/detect/clean_ecg"
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
     images = [
-        f for f in os.listdir(PREDICT_DIR)
-        if f.lower().endswith((".jpg", ".png", ".jpeg"))
+        f for f in os.listdir(INPUT_DIR)
+        if f.lower().endswith((".png", ".jpg", ".jpeg"))
     ]
 
-    if not images:
-        print("No images found.")
-        return
+    for name in images:
+        img_path = os.path.join(INPUT_DIR, name)
+        img = cv2.imread(img_path)
 
-    for img_name in images:
-        input_path = os.path.join(PREDICT_DIR, img_name)
-        output_path = os.path.join(OUTPUT_DIR, img_name)
-        crop_ecg_from_image(input_path, output_path)
+        if img is None:
+            print(f"[SKIP] {name}")
+            continue
 
-    print("\n✅ ECG waveform extraction completed successfully.")
+        result = remove_gridlines_strict(img)
 
+        out_path = os.path.join(OUTPUT_DIR, name)
+        cv2.imwrite(out_path, result)
 
-if __name__ == "__main__":
-    main()
+        print(f"Clean ECG saved: {name}")
+
+    print("\nAll ECGs cleaned successfully.")
