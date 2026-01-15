@@ -40,16 +40,14 @@ export default function ECGDigitisation() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
               </div>
-              <span className="text-xl font-semibold text-gray-900">ECG Digitisation</span>
+              <span className="text-xl font-semibold text-gray-900">Heartline AI</span>
             </div>
             <div className="flex items-center space-x-4">
               <button className="text-gray-700 hover:text-gray-900 font-medium">Login</button>
               <button className="bg-teal-500 hover:bg-teal-600 text-white px-4 py-2 rounded-lg font-medium flex items-center space-x-2">
                 <span>Sign Up</span>
               </button>
-              <button className="text-gray-500 hover:text-gray-700">
-                <HelpCircle className="w-6 h-6" />
-              </button>
+         
             </div>
           </div>
         </div>
