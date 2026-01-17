@@ -1,3 +1,4 @@
+# cropping only the ecg region
 import cv2
 import numpy as np
 import os
