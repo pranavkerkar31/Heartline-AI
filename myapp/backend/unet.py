@@ -24,7 +24,7 @@ def clean_ecg_pipeline(img_path,model):
         transforms.ToPILImage(),
         transforms.Resize((512,512)),
         transforms.ToTensor(),  
-    ]) (enhanced_gray).unsqueeze(0).to(device)
+    ]) (enhanced_gray).unsqueeze(0).to(device='cpu')
 
     with torch.no_grad():
         prediction=model(input_tensor)
