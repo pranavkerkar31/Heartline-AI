@@ -51,6 +51,8 @@ runs/
 # YOLO dataset (raw images & labels)
 backend/yolo_ecg/images/
 backend/yolo_ecg/labels/
+backend/input/
+backend/target/
 
 # Python cache
 __pycache__/

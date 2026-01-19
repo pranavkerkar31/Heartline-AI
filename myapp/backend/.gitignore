@@ -15,12 +15,14 @@ Thumbs.db
 # Editor / IDE
 .vscode/
 .idea/
-
+backend/input/
+backend/target/
 # Logs
 *.log
 
 # Local test images (optional)
 test_images/
+*.jpeg/
 
 # Raw ECG data (WFDB)
 *.dat
