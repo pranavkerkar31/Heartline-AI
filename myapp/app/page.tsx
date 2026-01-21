@@ -5,10 +5,14 @@ import { Camera, Upload, Zap, Shield, TrendingUp, CheckCircle, Info, HelpCircle,
 export default function ECGDigitisation() {
   const [activeTab, setActiveTab] = useState('home');
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<any>(null);
 
   const handleCameraCapture = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      setUploadedFile(file);
       const reader = new FileReader();
       reader.onload = (event) => {
         setUploadedImage(event.target?.result as string);
@@ -20,12 +24,52 @@ export default function ECGDigitisation() {
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      setUploadedFile(file);
       const reader = new FileReader();
       reader.onload = (event) => {
         setUploadedImage(event.target?.result as string);
       };
       reader.readAsDataURL(file);
     }
+  };
+
+  const handleAnalysis = async () => {
+    if (!uploadedFile) {
+      alert('Please upload an image first');
+      return;
+    }
+
+    setIsProcessing(true);
+    setAnalysisResult(null);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', uploadedFile);
+
+      const response = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error('Upload failed');
+      }
+
+      const result = await response.json();
+      setAnalysisResult(result);
+      console.log('Analysis result:', result);
+    } catch (error) {
+      console.error('Error during analysis:', error);
+      alert('Failed to process image. Please try again.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleClearImage = () => {
+    setUploadedImage(null);
+    setUploadedFile(null);
+    setAnalysisResult(null);
   };
 
   return (
@@ -126,7 +170,7 @@ export default function ECGDigitisation() {
                       className="w-full h-auto rounded-lg"
                     />
                     <button
-                      onClick={() => setUploadedImage(null)}
+                      onClick={handleClearImage}
                       className="absolute top-2 right-2 bg-red-500 hover:bg-red-600 text-white p-2 rounded-full shadow-lg"
                     >
                       <X className="w-4 h-4" />
@@ -176,10 +220,29 @@ export default function ECGDigitisation() {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  <button className="w-full bg-teal-500 hover:bg-teal-600 text-white px-6 py-3 rounded-lg font-medium flex items-center justify-center space-x-2 shadow-md hover:shadow-lg transition-all">
-                    <Play className="w-5 h-5" />
-                    <span>Run Analysis</span>
+                  <button 
+                    onClick={handleAnalysis}
+                    disabled={isProcessing}
+                    className="w-full bg-teal-500 hover:bg-teal-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-6 py-3 rounded-lg font-medium flex items-center justify-center space-x-2 shadow-md hover:shadow-lg transition-all"
+                  >
+                    {isProcessing ? (
+                      <>
+                        <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        <span>Processing...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Play className="w-5 h-5" />
+                        <span>Run Analysis</span>
+                      </>
+                    )}
                   </button>
+                  {analysisResult && (
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                      <p className="text-green-800 font-medium mb-2">Analysis Complete!</p>
+                      <p className="text-sm text-green-700">Width: {analysisResult.width}px, Height: {analysisResult.height}px</p>
+                    </div>
+                  )}
                   <div className="grid grid-cols-2 gap-3">
                     <label className="bg-white hover:bg-gray-50 text-gray-700 border border-gray-300 px-4 py-2 rounded-lg font-medium flex items-center justify-center space-x-2 text-sm cursor-pointer transition-colors">
                       <Camera className="w-4 h-4" />
