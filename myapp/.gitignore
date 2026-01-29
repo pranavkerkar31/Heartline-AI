@@ -1,7 +1,7 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
-# dependencies
-/node_modules
+# =====================================
+# Node / Frontend
+# =====================================
+/node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -10,55 +10,73 @@
 !.yarn/releases
 !.yarn/versions
 
-# testing
-/coverage
-
-# next.js
+# Next.js
 /.next/
 /out/
+/build/
 
-# production
-/build
+# Testing
+/coverage
 
-# misc
-.DS_Store
-*.pem
-
-# debug
+# Logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# Env files
 .env*
-
-# vercel
 .vercel
 
-# typescript
+# TypeScript
 *.tsbuildinfo
 next-env.d.ts
 
-# Python virtual environment
-backend/venv/
-backend/ecg_yolo/venv/
-venv/
+# =====================================
+# Python
+# =====================================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 
-# YOLO training outputs
+# Virtual environments
+venv/
+.venv/
+backend/venv/
+backend/env/
+
+# =====================================
+# YOLO / ML Outputs
+# =====================================
+# Training & prediction outputs
+backend/runs/
 runs/
 
-# YOLO dataset (raw images & labels)
+# Model weights
+*.pt
+
+# YOLO training artifacts
+results.csv
+results.png
+args.yaml
+train_batch*.jpg
+val_batch*.jpg
+predict_batch*.jpg
+labels.jpg
+
+# =====================================
+# YOLO Dataset (raw data – NOT versioned)
+# =====================================
 backend/yolo_ecg/images/
 backend/yolo_ecg/labels/
 backend/input/
 backend/target/
 
-# Python cache
-__pycache__/
-*.pyc
-
-# OS / editor files
+# =====================================
+# OS / Editor
+# =====================================
 .DS_Store
 Thumbs.db
 .vscode/
+.idea/
