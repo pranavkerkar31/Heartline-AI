@@ -54,6 +54,8 @@ backend/runs/
 runs/
 backend/brightness_augmented/
 backend/agcwd_augmented/
+backend/baseline_debug/
+
 # Model weights
 *.pt
 
