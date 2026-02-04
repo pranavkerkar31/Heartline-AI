@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import os
 
-INPUT_DIR = "runs/detect/cropped_ecg"
+INPUT_DIR = "agcwd_augmented"
 OUTPUT_DIR = "no_grid_ecg"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)

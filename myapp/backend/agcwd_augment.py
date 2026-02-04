@@ -4,8 +4,8 @@ import os
 import matplotlib.pyplot as plt
 
 # ================= PATHS =================
-INPUT_DIR = "C:/Academics/FOURTH YEAR/FINAL YEAR PROJECT/Project2025_26/ECG_dataset/augmented_clahe"
-OUTPUT_DIR = "C:/Academics/FOURTH YEAR/FINAL YEAR PROJECT/Project2025_26/ECG_dataset/augmented_agcwd"
+INPUT_DIR = "brightness_augmented"
+OUTPUT_DIR = "agcwd_augmented"
 NUM_SAMPLES = 4
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)

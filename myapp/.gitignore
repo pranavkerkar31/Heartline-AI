@@ -52,7 +52,8 @@ backend/env/
 # Training & prediction outputs
 backend/runs/
 runs/
-
+backend/brightness_augmented/
+backend/agcwd_augmented/
 # Model weights
 *.pt
 
