@@ -11,7 +11,7 @@ NUM_SAMPLES = 4
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ================= AGCWD FUNCTION =================
-def apply_agc_wd(image, alpha=0.5):
+def apply_agc_wd(image, alpha=0.8):
     """
     Adaptive Gamma Correction with Weighting Distribution (AGCWD)
     Supports color images by operating on the Value (V) channel in HSV space.
