@@ -55,6 +55,8 @@ runs/
 backend/brightness_augmented/
 backend/agcwd_augmented/
 backend/baseline_debug/
+backend/ECG_dataset/images/
+backend/perspective_corrected/
 
 # Model weights
 *.pt
