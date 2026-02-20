@@ -4,7 +4,7 @@ import os
 import matplotlib.pyplot as plt
 
 # ================= PATHS =================
-INPUT_DIR = "ECG_dataset/images"
+INPUT_DIR = "perspective"
 OUTPUT_DIR = "perspective_corrected"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)

@@ -125,7 +125,7 @@ def process_path(input_path, output_path):
 # ENTRY POINT
 # =====================================================
 if __name__ == "__main__":
-    INPUT_PATH = "img_97_page_0.jpeg"      # folder or single image
+    INPUT_PATH = "WhatsApp Image 2026-02-16 at 1.04.40 PM.jpeg"      # folder or single image
     OUTPUT_PATH = "deskewed_ecg"
 
     process_path(INPUT_PATH, OUTPUT_PATH)
