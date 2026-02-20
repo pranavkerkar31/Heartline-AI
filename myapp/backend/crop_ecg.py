@@ -4,7 +4,7 @@ import numpy as np
 import os
 
 PREDICT_DIR = "runs/detect/predict"
-OUTPUT_DIR = "runs/detect/cropped_ecg"
+OUTPUT_DIR = "cropped_ecg"
 
 LOWER_BLUE = np.array([100, 150, 50])
 UPPER_BLUE = np.array([140, 255, 255])

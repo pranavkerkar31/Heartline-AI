@@ -4,6 +4,7 @@ ECG_dataset/augmented_clahe/
 ECG_dataset/augmented_perspective/
 ECG_dataset/corrected_perspective/
 smart_camera/captured_images/
+yolo_ecg/cropped_ecg/
 
 # Python
 __pycache__/
