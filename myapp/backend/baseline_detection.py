@@ -3,13 +3,11 @@ import numpy as np
 import os
 import math
 
-INPUT_DIR = "no_grid_ecg"        # ✅ grid-removed images
-DEBUG_DIR = "baseline_debug"     # visual verification
+INPUT_DIR = "no_grid_ecg"        
+DEBUG_DIR = "baseline_debug"     
 
 os.makedirs(DEBUG_DIR, exist_ok=True)
 
-
-# ================= BASELINE DETECTION =================
 def detect_ecg_baselines(binary):
     """
     Detect ECG baselines using Hough Transform.
