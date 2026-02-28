@@ -79,6 +79,9 @@ backend/yolo_ecg/labels/
 backend/input/
 backend/target/
 backend/no_grid_ecg/
+backend/cropped_ecg/
+backend/augmented_clahe/
+backend/final_ecg/
 
 # =====================================
 # OS / Editor
