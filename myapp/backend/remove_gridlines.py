@@ -5,7 +5,7 @@ import os
 # ======================================================
 # PATHS
 # ======================================================
-INPUT_DIR = "cropped_ecg"          # ORIGINAL images only
+INPUT_DIR = "augmented_clahe"          # ORIGINAL images only
 OUTPUT_DIR = "final_ecg"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 

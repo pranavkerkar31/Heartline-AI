@@ -5,7 +5,7 @@ import os
 # -----------------------------
 # Paths
 # -----------------------------
-IMAGE_DIR = "cropped_ecg"                 # input images (paper + digital)
+IMAGE_DIR = "yolo_ecg/cropped_ecg"                 # input images (paper + digital)
 OUTPUT_DIR = "augmented_clahe"  # output images
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -34,11 +34,11 @@ def brighten_background(v):
 
     # Increase brightness (key step)
     alpha = 1.0   # keep contrast stable
-    beta = 100     # brightness boost
+    beta = 40     # brightness boost
     v = cv2.convertScaleAbs(v, alpha=alpha, beta=beta)
 
     # Gamma correction (<1 makes image brighter)
-    gamma = 0.8
+    gamma = 0.6
     v_gamma = np.power(v / 255.0, gamma) * 255
     v_gamma = v_gamma.astype(np.uint8)
 
