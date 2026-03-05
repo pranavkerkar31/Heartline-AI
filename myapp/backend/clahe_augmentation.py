@@ -5,7 +5,7 @@ import os
 # -----------------------------
 # Paths
 # -----------------------------
-IMAGE_DIR = "yolo_ecg/cropped_ecg"                 # input images (paper + digital)
+IMAGE_DIR = "cropped_ecg"                 # input images (paper + digital)
 OUTPUT_DIR = "augmented_clahe"  # output images
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
