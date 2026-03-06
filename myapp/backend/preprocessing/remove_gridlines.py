@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 import os
 
-INPUT_DIR = "cropped_ecg"
+INPUT_DIR = "../cropped_ecg"
 OUTPUT_DIR = "no_grid_ecg"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
