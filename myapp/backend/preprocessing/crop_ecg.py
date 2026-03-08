@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 import os
 
-PREDICT_DIR = "runs/detect/predict"
+PREDICT_DIR = "../runs/detect/predict2"
 OUTPUT_DIR = "cropped_ecg"
 
 LOWER_BLUE = np.array([100, 150, 50])
