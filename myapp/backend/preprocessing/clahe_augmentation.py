@@ -2,8 +2,8 @@ import cv2
 import os
 
 # Paths
-IMAGE_DIR = "C:/Academics/FOURTH YEAR/FINAL YEAR PROJECT/Project2025_26/ECG_dataset/upscaled_images"
-OUTPUT_DIR = "C:/Academics/FOURTH YEAR/FINAL YEAR PROJECT/Project2025_26/ECG_dataset/augmented_clahe"
+IMAGE_DIR = "cropped_ecg"
+OUTPUT_DIR = "augmented_clahe"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 

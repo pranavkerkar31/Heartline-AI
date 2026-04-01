@@ -19,6 +19,7 @@ backend/input/
 backend/target/
 preprocessing/cropped_ecg/
 preprocessing/no_grid_ecg/
+preprocessing/processed_images/
 # Logs
 *.log
 
