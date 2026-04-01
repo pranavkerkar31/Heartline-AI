@@ -17,6 +17,8 @@ Thumbs.db
 .idea/
 backend/input/
 backend/target/
+preprocessing/cropped_ecg/
+preprocessing/no_grid_ecg/
 # Logs
 *.log
 

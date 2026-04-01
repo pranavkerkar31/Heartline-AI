@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Camera, Upload, CheckCircle, Info, X, Play } from "lucide-react";
 
 export default function CameraPage() {
@@ -10,10 +10,48 @@ export default function CameraPage() {
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const captureInputRef = useRef<HTMLInputElement>(null);
   const stableFrames = useRef(0);
+  const rafIdRef = useRef<number | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const scanningRef = useRef(false);
 
   const [scanning, setScanning] = useState(false);
   const [scanText, setScanText] = useState("Looking for ECG paper...");
+
+  const apiBase = useMemo(() => {
+    // IMPORTANT: 127.0.0.1 points to the PHONE when opened on a phone.
+    // Set NEXT_PUBLIC_BACKEND_URL to something reachable from the phone (LAN IP + port, or tunnel URL).
+    return process.env.NEXT_PUBLIC_BACKEND_URL || "";
+  }, []);
+
+  const stopCamera = () => {
+    scanningRef.current = false;
+    setScanning(false);
+    stableFrames.current = 0;
+
+    if (rafIdRef.current != null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+    }
+
+    if (videoRef.current) {
+      try {
+        videoRef.current.pause();
+      } catch {}
+      videoRef.current.srcObject = null;
+    }
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => stopCamera();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -25,6 +63,20 @@ export default function CameraPage() {
     reader.readAsDataURL(file);
   };
 
+  const handleCapturePhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
+    // Same as upload, but intended for mobile camera capture fallback
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadedFile(file);
+    const reader = new FileReader();
+    reader.onload = (ev) => setUploadedImage(ev.target?.result as string);
+    reader.readAsDataURL(file);
+
+    // allow taking the same filename twice (iOS/Android)
+    e.target.value = "";
+  };
+
   const handleClearImage = () => {
     setUploadedImage(null);
     setUploadedFile(null);
@@ -32,32 +84,65 @@ export default function CameraPage() {
   };
 
   const startCameraScan = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
-      });
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-        setScanning(true);
-        requestAnimationFrame(scanLoop);
-      }
-    } catch (error) {
-      console.error("Camera access error:", error);
-      alert("Unable to access camera. Please check permissions.");
+  try {
+    // Many mobile browsers require a secure context for camera access.
+    // localhost is treated as secure, but a LAN IP over http is NOT.
+    if (!window.isSecureContext) {
+      // Fallback: open the phone's native camera via file input capture.
+      // This works on mobile over HTTP and still lets you upload + analyze.
+      captureInputRef.current?.click();
+      return;
     }
-  };
+
+    // Check if browser supports camera
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      alert("Camera not supported in this browser");
+      return;
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" } },
+      audio: false,
+    });
+
+    if (videoRef.current) {
+      stopCamera();
+      streamRef.current = stream;
+      videoRef.current.srcObject = stream;
+      // iOS Safari: ensure metadata is loaded before play and canvas sizing.
+      await new Promise<void>((resolve) => {
+        const v = videoRef.current!;
+        if (v.readyState >= 1) return resolve();
+        v.onloadedmetadata = () => resolve();
+      });
+      await videoRef.current.play();
+      setScanning(true);
+      scanningRef.current = true;
+      rafIdRef.current = requestAnimationFrame(scanLoop);
+    }
+
+  } catch (error) {
+    console.error("Camera access error:", error);
+    alert("Unable to access camera. Please allow camera permission.");
+  }
+};
 
   const scanLoop = async () => {
-    if (!videoRef.current || !canvasRef.current || !scanning) return;
+    if (!videoRef.current || !canvasRef.current || !scanningRef.current) return;
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d")!;
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    const vw = video.videoWidth || 0;
+    const vh = video.videoHeight || 0;
+    if (!vw || !vh) {
+      rafIdRef.current = requestAnimationFrame(scanLoop);
+      return;
+    }
+
+    canvas.width = vw;
+    canvas.height = vh;
 
     ctx.drawImage(video, 0, 0);
 
@@ -66,10 +151,15 @@ export default function CameraPage() {
     );
 
     try {
+      if (!apiBase) {
+        // Still keep scanning preview even if backend URL isn't configured.
+        setScanText("Set NEXT_PUBLIC_BACKEND_URL to enable auto-detect...");
+        stableFrames.current = 0;
+      } else {
       const form = new FormData();
       form.append("file", blob);
 
-      const r = await fetch("http://127.0.0.1:8000/detect-paper", {
+      const r = await fetch(`${apiBase}/detect-paper`, {
         method: "POST",
         body: form,
       });
@@ -97,21 +187,28 @@ export default function CameraPage() {
           return;
         }
       }
+      }
     } catch (error) {
       console.error("Detection error:", error);
     }
 
-    requestAnimationFrame(scanLoop);
+    rafIdRef.current = requestAnimationFrame(scanLoop);
   };
 
   const captureFinal = async (blob: Blob) => {
+    scanningRef.current = false;
     setScanning(false);
 
     try {
+      if (!apiBase) {
+        alert("Backend URL not configured. Set NEXT_PUBLIC_BACKEND_URL and retry.");
+        stopCamera();
+        return;
+      }
       const form = new FormData();
       form.append("file", blob);
 
-      const res = await fetch("http://127.0.0.1:8000/upload", {
+      const res = await fetch(`${apiBase}/upload`, {
         method: "POST",
         body: form,
       });
@@ -119,16 +216,13 @@ export default function CameraPage() {
       const result = await res.json();
       setAnalysisResult(result);
 
-      // Stop camera stream
-      if (videoRef.current && videoRef.current.srcObject) {
-        const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
-        tracks.forEach((track) => track.stop());
-      }
+      stopCamera();
 
       alert("ECG captured and processed successfully!");
     } catch (error) {
       console.error("Capture error:", error);
       alert("Failed to process image. Please try again.");
+      stopCamera();
     }
   };
 
@@ -170,7 +264,13 @@ export default function CameraPage() {
         <div className="border-2 border-dashed border-teal-300 rounded-xl p-4 sm:p-6 mb-6 bg-gray-50 relative">
           {scanning ? (
             <>
-              <video ref={videoRef} className="w-full h-auto rounded-lg" />
+              <video
+                ref={videoRef}
+                className="w-full h-auto rounded-lg"
+                playsInline
+                muted
+                autoPlay
+              />
               <canvas
                 ref={canvasRef}
                 className="absolute top-4 left-4 right-4 bottom-4 w-[calc(100%-2rem)] h-[calc(100%-2rem)] pointer-events-none"
@@ -222,7 +322,7 @@ export default function CameraPage() {
               className="bg-teal-500 hover:bg-teal-600 text-white px-6 py-3 rounded-lg font-medium flex items-center justify-center space-x-2 cursor-pointer transition-colors"
             >
               <Camera className="w-5 h-5" />
-              <span>Start Camera Scan</span>
+              <span>Start Camera</span>
             </button>
             <label className="bg-white hover:bg-gray-50 text-gray-700 border border-gray-300 px-6 py-3 rounded-lg font-medium flex items-center justify-center space-x-2 cursor-pointer transition-colors">
               <Upload className="w-5 h-5" />
@@ -234,6 +334,16 @@ export default function CameraPage() {
                 onChange={handleImageUpload}
               />
             </label>
+
+            {/* Hidden mobile camera capture fallback (triggered automatically on HTTP) */}
+            <input
+              ref={captureInputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={handleCapturePhoto}
+            />
           </div>
         ) : uploadedImage ? (
           <div className="space-y-3">
