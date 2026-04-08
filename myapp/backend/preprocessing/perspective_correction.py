@@ -1,118 +1,145 @@
 import cv2
 import numpy as np
 import os
+import sys
 
-INPUT_DIR = "../yolo_ecg/images/test"
-OUTPUT_DIR = "straight_ecg"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
+
+# 🔹 SET YOUR PATHS HERE
+input_dir = "../yolo_ecg/images/test"     # <-- change this
+output_dir = "straight_images"   # <-- change this
+
+manual_angle = None     # or set like 2.5 if needed
+show_preview = False    # True if you want preview window
 
 
-def drawHoughLines(image, lines, output):
-    out = image.copy()
+def load_image(path: str) -> np.ndarray:
+    img = cv2.imread(path)
+    if img is None:
+        raise FileNotFoundError(f"Cannot load image: {path}")
+    return img
+
+
+def detect_skew_angle(img: np.ndarray) -> float:
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    scale = min(1.0, 1200 / max(img.shape[:2]))
+    small = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) if scale < 1.0 else gray.copy()
+
+    blurred = cv2.GaussianBlur(small, (5, 5), 0)
+    edges   = cv2.Canny(blurred, 50, 150, apertureSize=3)
+
+    lines = cv2.HoughLinesP(
+        edges,
+        rho=1,
+        theta=np.pi / 360,
+        threshold=80,
+        minLineLength=int(small.shape[1] * 0.15),
+        maxLineGap=20,
+    )
+
+    angles = []
     if lines is not None:
         for line in lines:
-            rho, theta = line[0]
-            a = np.cos(theta)
-            b = np.sin(theta)
-            x0 = a * rho
-            y0 = b * rho
-            x1 = int(x0 + 2000 * (-b))
-            y1 = int(y0 + 2000 * (a))
-            x2 = int(x0 - 2000 * (-b))
-            y2 = int(y0 - 2000 * (a))
-            cv2.line(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
-    cv2.imwrite(output, out)
+            x1, y1, x2, y2 = line[0]
+            if x2 == x1:
+                continue
+            angle_deg = np.degrees(np.arctan2(y2 - y1, x2 - x1))
+            if abs(angle_deg) <= 20:
+                angles.append(angle_deg)
+
+    if len(angles) >= 5:
+        return float(np.median(angles))
+
+    # fallback
+    _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if not contours:
+        return 0.0
+
+    largest = max(contours, key=cv2.contourArea)
+    rect    = cv2.minAreaRect(largest)
+    angle   = rect[2]
+    if angle < -45:
+        angle += 90
+
+    return float(angle)
 
 
-def intersection(line1, line2):
-    rho1, theta1 = line1[0]
-    rho2, theta2 = line2[0]
+def rotate_image(img: np.ndarray, angle_deg: float) -> np.ndarray:
+    h, w = img.shape[:2]
+    cx, cy = w / 2, h / 2
 
-    A = np.array([
-        [np.cos(theta1), np.sin(theta1)],
-        [np.cos(theta2), np.sin(theta2)]
-    ])
-    B = np.array([[rho1], [rho2]])
+    M = cv2.getRotationMatrix2D((cx, cy), angle_deg, 1.0)
+    cos = abs(M[0, 0])
+    sin = abs(M[0, 1])
 
-    x0, y0 = np.linalg.solve(A, B)
-    return int(x0), int(y0)
+    new_w = int(h * sin + w * cos)
+    new_h = int(h * cos + w * sin)
+
+    M[0, 2] += (new_w / 2) - cx
+    M[1, 2] += (new_h / 2) - cy
+
+    return cv2.warpAffine(
+        img, M, (new_w, new_h),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(255, 255, 255),
+    )
 
 
-def cyclic_intersection_pts(pts):
-    center = np.mean(pts, axis=0)
+def deskew_ecg(input_path: str, output_dir: str) -> str:
+    img = load_image(input_path)
 
-    ordered = [
-        pts[np.argmin(pts[:,0] + pts[:,1])],  # Top-left
-        pts[np.argmin(pts[:,0] - pts[:,1])],  # Top-right
-        pts[np.argmax(pts[:,0] + pts[:,1])],  # Bottom-right
-        pts[np.argmax(pts[:,0] - pts[:,1])]   # Bottom-left
+    if manual_angle is not None:
+        skew = manual_angle
+    else:
+        skew = detect_skew_angle(img)
+
+    correction = -skew
+
+    if abs(correction) < 0.1:
+        corrected = img.copy()
+    else:
+        corrected = rotate_image(img, correction)
+
+    base, ext = os.path.splitext(os.path.basename(input_path))
+    out_path = os.path.join(output_dir, f"{base}_deskewed{ext}")
+    cv2.imwrite(out_path, corrected)
+
+    # optional preview
+    if show_preview:
+        cv2.imshow("Corrected", corrected)
+        cv2.waitKey(0)
+
+    return out_path
+
+
+def main():
+    os.makedirs(input_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+
+    all_files = sorted(os.listdir(input_dir))
+    image_files = [
+        f for f in all_files
+        if os.path.splitext(f)[1].lower() in SUPPORTED_EXTS
     ]
-    return np.array(ordered, dtype="float32")
+
+    if not image_files:
+        print("No images found in input folder.")
+        sys.exit(0)
+
+    print(f"Processing {len(image_files)} images...")
+
+    for fname in image_files:
+        fpath = os.path.join(input_dir, fname)
+        try:
+            out = deskew_ecg(fpath, output_dir)
+            print(f"✔ {fname} → {out}")
+        except Exception as e:
+            print(f"✖ {fname}: {e}")
 
 
-def straighten_ecg(image_path, out_path):
-    image = cv2.imread(image_path)
-    image = cv2.resize(image, (0,0), fx=0.8, fy=0.8)
-
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 80, 200)
-
-    lines = cv2.HoughLines(edges, 1, np.pi/180, 200)
-
-    if lines is None:
-        print("No lines detected:", image_path)
-        return
-
-    # Separate horizontal and vertical lines
-    horizontal = []
-    vertical = []
-
-    for line in lines:
-        rho, theta = line[0]
-        if theta < np.pi/4 or theta > 3*np.pi/4:
-            vertical.append(line)
-        else:
-            horizontal.append(line)
-
-    # Take strongest 2 horizontal and 2 vertical lines
-    horizontal = horizontal[:2]
-    vertical = vertical[:2]
-
-    # Find 4 intersection points
-    pts = []
-    for h in horizontal:
-        for v in vertical:
-            pts.append(intersection(h, v))
-
-    pts = np.array(pts)
-    pts = cyclic_intersection_pts(pts)
-
-    # Perspective transform
-    (tl, tr, br, bl) = pts
-
-    widthA = np.linalg.norm(br - bl)
-    widthB = np.linalg.norm(tr - tl)
-    maxWidth = int(max(widthA, widthB))
-
-    heightA = np.linalg.norm(tr - br)
-    heightB = np.linalg.norm(tl - bl)
-    maxHeight = int(max(heightA, heightB))
-
-    dst = np.array([
-        [0, 0],
-        [maxWidth, 0],
-        [maxWidth, maxHeight],
-        [0, maxHeight]], dtype="float32")
-
-    M = cv2.getPerspectiveTransform(pts, dst)
-    warped = cv2.warpPerspective(image, M, (maxWidth, maxHeight))
-
-    cv2.imwrite(out_path, warped)
-
-
-# Process folder
-for file in os.listdir(INPUT_DIR):
-    straighten_ecg(os.path.join(INPUT_DIR, file),
-                   os.path.join(OUTPUT_DIR, file))
-
-print("Done: ECG images straightened.")
+if __name__ == "__main__":
+    main()
