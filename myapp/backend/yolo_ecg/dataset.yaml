@@ -1,0 +1,6 @@
+train: images/train
+val: images/train
+
+nc: 1
+names:
+  0: ecg_waveform_region

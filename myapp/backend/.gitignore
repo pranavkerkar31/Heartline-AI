@@ -1,0 +1,39 @@
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.vscode/
+.idea/
+backend/input/
+backend/target/
+preprocessing/cropped_ecg/
+preprocessing/no_grid_ecg/
+preprocessing/processed_images/
+# Logs
+*.log
+
+# Local test images (optional)
+test_images/
+*.jpeg/
+
+# Raw ECG data (WFDB)
+*.dat
+*.hea
+*.atr
+*.qrs
+*.xml
+
+*.pt
+*.onnx
+*.weights
