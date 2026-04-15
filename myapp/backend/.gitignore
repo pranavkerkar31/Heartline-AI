@@ -16,6 +16,9 @@ Thumbs.db
 .vscode/
 .idea/
 backend/input/
+backend/yolo_ecg/crop_dataset/images/train
+backend/yolo_ecg/crop_dataset/images/val
+
 backend/target/
 preprocessing/cropped_ecg/
 preprocessing/no_grid_ecg/
