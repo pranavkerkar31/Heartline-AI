@@ -1,4 +1,3 @@
-print("🔥 THIS IS NEW DESKEW FILE")
 import cv2
 import numpy as np
 import os
@@ -7,7 +6,7 @@ print("🔥 Deskew pipeline running...")
 
 # -------------------- PATH CONFIG --------------------
 
-INPUT_DIR = "../../yolo_ecg/crop_dataset/images/val"   # 👈 correct relative path
+INPUT_DIR = "../yolo_ecg/crop_dataset/images/val"  # 👈 correct relative path
 OUTPUT_DIR = "deskewed_ecg"                            # 👈 output folder
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
