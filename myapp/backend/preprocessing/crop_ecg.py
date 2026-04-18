@@ -1,148 +1,79 @@
-print("🔥 THIS IS NEW DESKEW FILE")
+# cropping only the ecg region
 import cv2
 import numpy as np
 import os
 
-print("🔥 Deskew pipeline running...")
+PREDICT_DIR = "../yolo_ecg/runs/detect/predict"
+OUTPUT_DIR = "cropped_ecg"
 
-# -------------------- PATH CONFIG --------------------
+LOWER_BLUE = np.array([100, 150, 50])
+UPPER_BLUE = np.array([140, 255, 255])
 
-INPUT_DIR = "../../yolo_ecg/crop_dataset/images/val"   # 👈 correct relative path
-OUTPUT_DIR = "deskewed_ecg"                            # 👈 output folder
+BOX_MARGIN = 12          # removes blue border
+TOP_TEXT_RATIO = 0.04   # removes YOLO label text (8%)
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# -------------------- FUNCTIONS --------------------
-
-def order_points(pts):
-    rect = np.zeros((4, 2), dtype="float32")
-    s = pts.sum(axis=1)
-    rect[0] = pts[np.argmin(s)]
-    rect[2] = pts[np.argmax(s)]
-    diff = np.diff(pts, axis=1)
-    rect[1] = pts[np.argmin(diff)]
-    rect[3] = pts[np.argmax(diff)]
-    return rect
-
-def four_point_transform(image, pts):
-    rect = order_points(pts)
-    (tl, tr, br, bl) = rect
-
-    maxWidth  = max(int(np.linalg.norm(br-bl)), int(np.linalg.norm(tr-tl)))
-    maxHeight = max(int(np.linalg.norm(tr-br)), int(np.linalg.norm(tl-bl)))
-
-    dst = np.array([
-        [0, 0],
-        [maxWidth-1, 0],
-        [maxWidth-1, maxHeight-1],
-        [0, maxHeight-1]
-    ], dtype="float32")
-
-    M = cv2.getPerspectiveTransform(rect, dst)
-    return cv2.warpPerspective(image, M, (maxWidth, maxHeight))
-
-def detect_document_corners(img):
-    h, w = img.shape[:2]
-    scale = 800 / max(h, w)
-
-    small = cv2.resize(img, (int(w*scale), int(h*scale)))
-    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-
-    _, thresh = cv2.threshold(blurred, 0, 255,
-                             cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL,
-                                   cv2.CHAIN_APPROX_SIMPLE)
-
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)
-
-    for cnt in contours[:5]:
-        peri = cv2.arcLength(cnt, True)
-        approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
-
-        if len(approx) == 4:
-            return approx.reshape(4, 2) / scale
-
-    # fallback
-    margin = int(min(h, w) * 0.05)
-    return np.array([
-        [margin, margin],
-        [w-margin, margin],
-        [w-margin, h-margin],
-        [margin, h-margin]
-    ], dtype=np.float32)
-
-def fix_orientation(img):
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    rotations = [
-        (0, None),
-        (90, cv2.ROTATE_90_CLOCKWISE),
-        (180, cv2.ROTATE_180),
-        (270, cv2.ROTATE_90_COUNTERCLOCKWISE),
-    ]
-
-    best_score = -1e9
-    best_img = img
-
-    for _, rot_code in rotations:
-        g = cv2.rotate(gray, rot_code) if rot_code else gray
-
-        rh, rw = g.shape
-        top_mean = np.mean(g[:int(rh*0.10), :])
-        mid_mean = np.mean(g[int(rh*0.20):int(rh*0.70), :])
-
-        score = top_mean - mid_mean
-
-        if score > best_score:
-            best_score = score
-            best_img = cv2.rotate(img, rot_code) if rot_code else img
-
-    return best_img
-
-def process_image(input_path, output_path):
-    print(f"\n📷 Processing: {input_path}")
-
-    img = cv2.imread(input_path)
-
+def crop_ecg_from_image(image_path, save_path):
+    img = cv2.imread(image_path)
     if img is None:
-        print(f"❌ Cannot read image: {input_path}")
+        print(f"[ERROR] Cannot read {image_path}")
         return
 
-    corners = detect_document_corners(img)
-    warped = four_point_transform(img, corners)
+    # Convert to HSV
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-    h, w = warped.shape[:2]
-    if h > w:
-        warped = cv2.rotate(warped, cv2.ROTATE_90_CLOCKWISE)
 
-    final = fix_orientation(warped)
+    # Detect blue bounding box
+    mask = cv2.inRange(hsv, LOWER_BLUE, UPPER_BLUE)
 
-    cv2.imwrite(output_path, final)
-    print(f"✅ Saved: {output_path}")
+    # Strengthen box lines
+    kernel = np.ones((5, 5), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
-# -------------------- RUN --------------------
+    contours, _ = cv2.findContours(
+        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
 
-print("📂 INPUT DIR:", os.path.abspath(INPUT_DIR))
+    if not contours:
+        print(f"[SKIP] No blue box found in {image_path}")
+        return
 
-if not os.path.exists(INPUT_DIR):
-    print("❌ INPUT_DIR does not exist!")
-    exit()
+    # Largest contour = ECG box
+    c = max(contours, key=cv2.contourArea)
+    x, y, w, h = cv2.boundingRect(c)
 
-files = os.listdir(INPUT_DIR)
+    # Inner crop (remove blue border)
+    x1 = max(x + BOX_MARGIN, 0)
+    y1 = max(y + BOX_MARGIN, 0)
+    x2 = min(x + w - BOX_MARGIN, img.shape[1])
+    y2 = min(y + h - BOX_MARGIN, img.shape[0])
 
-if len(files) == 0:
-    print("❌ No images found in INPUT_DIR!")
-    exit()
+    cropped = img[y1:y2, x1:x2]
 
-for file in files:
-    if file.lower().endswith((".png", ".jpg", ".jpeg")):
-        inp = os.path.join(INPUT_DIR, file)
+    # 🔑 Remove YOLO label text strip from top
+    top_cut = int(TOP_TEXT_RATIO * cropped.shape[0])
+    cropped = cropped[top_cut:, :]
 
-        name, ext = os.path.splitext(file)
-        out = os.path.join(OUTPUT_DIR, f"{name}_deskewed{ext}")
+    cv2.imwrite(save_path, cropped)
+    print(f"[OK] Saved clean ECG: {save_path}")
 
-        process_image(inp, out)
+def main():
+    images = [
+        f for f in os.listdir(PREDICT_DIR)
+        if f.lower().endswith((".jpg", ".png", ".jpeg"))
+    ]
 
-print("\n🎉 Done processing all images!")
+    if not images:
+        print("No images found.")
+        return
+
+    for img_name in images:
+        input_path = os.path.join(PREDICT_DIR, img_name)
+        output_path = os.path.join(OUTPUT_DIR, img_name)
+        crop_ecg_from_image(input_path, output_path)
+
+    print("\n ECG waveform extraction completed successfully.")
+
+if __name__ == "__main__":
+    main()
