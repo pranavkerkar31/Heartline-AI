@@ -58,6 +58,7 @@ backend/baseline_debug/
 backend/ECG_dataset/images/
 backend/perspective_corrected/
 backend/yolo_ecg/cropped_ecg/
+backend/preprocessing/output/
 
 # Model weights
 *.pt

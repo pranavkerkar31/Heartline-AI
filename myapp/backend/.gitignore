@@ -16,9 +16,14 @@ Thumbs.db
 .vscode/
 .idea/
 backend/input/
+yolo_ecg/crop_dataset/
+
 backend/target/
 preprocessing/cropped_ecg/
 preprocessing/no_grid_ecg/
+preprocessing/processed_images/
+uploads/work_1444c46d-b7a8-4d59-8521-53282922097d
+uploads/result_1444c46d-b7a8-4d59-8521-53282922097d.json
 # Logs
 *.log
 

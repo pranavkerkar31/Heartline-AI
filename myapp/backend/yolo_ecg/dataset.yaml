@@ -1,6 +1,8 @@
+path: C:/Users/prana/Documents/GitHub/Heartline-AI/myapp/backend/yolo_ecg/crop_dataset
+
 train: images/train
-val: images/train
+val: images/val 
 
 nc: 1
 names:
-  0: ecg_waveform_region
+  0: ec

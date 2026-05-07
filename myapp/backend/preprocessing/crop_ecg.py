@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 import os
 
-PREDICT_DIR = "../runs/detect/predict2"
+PREDICT_DIR = "../yolo_ecg/runs/detect/predict"
 OUTPUT_DIR = "cropped_ecg"
 
 LOWER_BLUE = np.array([100, 150, 50])
@@ -22,6 +22,7 @@ def crop_ecg_from_image(image_path, save_path):
 
     # Convert to HSV
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
 
     # Detect blue bounding box
     mask = cv2.inRange(hsv, LOWER_BLUE, UPPER_BLUE)

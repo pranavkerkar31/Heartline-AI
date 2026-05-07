@@ -7,6 +7,9 @@ smart_camera/captured_images/
 yolo_ecg/cropped_ecg/
 backend/croppped_ecg/
 backend/augmented_clahe/
+backend/yolo_ecg/crop_dataset/images/train
+backend/yolo_ecg/crop_dataset/images/val
+yolo_ecg/crop_dataset/
 
 # Python
 __pycache__/
