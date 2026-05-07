@@ -1,19 +1,45 @@
-import { NextResponse, NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import path from "path";
+import fs from "fs/promises";
 
 export async function POST(req: NextRequest) {
-  const formData = await req.formData();
-  const file = formData.get("file") as File;
+  try {
+    const data = await req.formData();
 
-  if (!file) {
-    return NextResponse.json({ error: "No file" }, { status: 400 });
+    const file = data.get("image") as File;
+
+    if (!file) {
+      return NextResponse.json({
+        success: false,
+        error: "No image uploaded",
+      });
+    }
+
+    // Convert image to buffer
+    const bytes = await file.arrayBuffer();
+    const buffer = Buffer.from(bytes);
+
+    // Save image path
+    const uploadPath = path.join(process.cwd(), "./backend/uploads/input.jpg");
+
+    // Save image
+    console.log("File received:", file.name);
+
+    console.log("Current working directory:", process.cwd());
+
+    console.log("Upload path:", uploadPath);
+    await fs.writeFile(uploadPath, buffer);
+
+    return NextResponse.json({
+      success: true,
+      message: "Image uploaded successfully",
+    });
+  } catch (error) {
+    console.log(error);
+
+    return NextResponse.json({
+      success: false,
+      error: "Upload failed",
+    });
   }
-
-  // move to fastapi
-  const backendRes = await fetch("http://localhost:8000/upload", {
-    method: "POST",
-    body: formData,
-  });
-
-  const data = await backendRes.json();
-  return NextResponse.json(data);
 }
