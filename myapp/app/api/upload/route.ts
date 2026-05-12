@@ -45,6 +45,9 @@ export async function POST(req: NextRequest) {
     const resultPath = path.join(uploadsDir, `result_${runId}.json`);
     const scriptPath = path.join(backendDir, "run_ecg_analysis.py");
 
+    // Path to your virtual environment's python executable
+    const venvPythonPath = path.join(process.cwd(), "..", "env", "Scripts", "python.exe");
+
     const args = [scriptPath, "--input", uploadPath, "--run-id", runId, "--result-path", resultPath];
 
     const trySpawnPython = (pythonCmd: string) =>
@@ -59,7 +62,6 @@ export async function POST(req: NextRequest) {
         });
 
         p.on("error", (err) => {
-          // e.g. ENOENT if `python` isn't in PATH
           if (!resolved) {
             resolved = true;
             resolve({ code: 1, stderrTail: String(err) });
@@ -83,10 +85,15 @@ export async function POST(req: NextRequest) {
         });
       });
 
-    // On Windows, `py` is often available even when `python` isn't on PATH.
-    const firstAttempt = await trySpawnPython("python");
+    // 1. Try Virtual Env first, then fallback to 'python' or 'py'
+    const venvAttempt = await trySpawnPython(venvPythonPath);
     const { code, stderrTail } =
-      firstAttempt.code === 0 ? firstAttempt : await trySpawnPython("py");
+      venvAttempt.code === 0 
+        ? venvAttempt 
+        : await (async () => {
+            const pythonAttempt = await trySpawnPython("python");
+            return pythonAttempt.code === 0 ? pythonAttempt : await trySpawnPython("py");
+          })();
 
     if (code !== 0) {
       return NextResponse.json({

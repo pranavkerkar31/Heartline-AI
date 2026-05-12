@@ -172,6 +172,10 @@ def main():
     print("=" * 60)
 
     try:
+        # Import the advanced preprocessing pipeline
+        sys.path.insert(0, str(preprocessing_dir))
+        from preprocessing_pipeline import ECGImagePipeline
+
         cropped_img = cv2.imread(str(cropped_path))
         if cropped_img is None:
             write_result(str(result_path), {
@@ -181,20 +185,27 @@ def main():
             })
             return
 
-        scale_factor = 2.0
-        h, w = cropped_img.shape[:2]
-        upscaled = cv2.resize(
-            cropped_img,
-            (int(w * scale_factor), int(h * scale_factor)),
-            interpolation=cv2.INTER_LANCZOS4,
-        )
-        cv2.imwrite(str(final_output), upscaled)
-        print(f"Upscale complete. Output → {final_output}")
+        print("Applying advanced enhancements (Upscale + CLAHE + AGCWD)...")
+        
+        # Initialize pipeline (paths are dummy here as we use steps manually)
+        pipeline = ECGImagePipeline(input_dir=uploads_dir, output_dir=uploads_dir)
+        
+        # Step 1: Advanced Upscale
+        img_upscaled = pipeline.step1_upscale(cropped_img)
+        
+        # Step 2: Brightness Adjustment (CLAHE)
+        img_brightness = pipeline.step2_brightness_clahe(img_upscaled)
+        
+        # Step 3: Contrast Enhancement (AGCWD)
+        img_final = pipeline.step3_contrast_agcwd(img_brightness)
+        
+        cv2.imwrite(str(final_output), img_final)
+        print(f"Enhancements complete. Output → {final_output}")
 
     except Exception as e:
         write_result(str(result_path), {
             "success": False,
-            "error": "Upscaling failed",
+            "error": "Image enhancement failed",
             "details": str(e),
         })
         return
