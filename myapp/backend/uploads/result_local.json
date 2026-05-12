@@ -3,7 +3,7 @@
   "run_id": "local",
   "width": 3270,
   "height": 5696,
-  "processed_image": "C:\\Users\\prana\\Documents\\GitHub\\Heartline-AI\\myapp\\backend\\uploads\\processed_local.jpg",
-  "cropped_image": "C:\\Users\\prana\\Documents\\GitHub\\Heartline-AI\\myapp\\backend\\uploads\\cropped_local.jpg",
+  "processed_image": "C:\\Users\\ashma\\OneDrive\\Documents\\github\\Heartline-AI\\myapp\\backend\\uploads\\processed_local.jpg",
+  "cropped_image": "C:\\Users\\ashma\\OneDrive\\Documents\\github\\Heartline-AI\\myapp\\backend\\uploads\\cropped_local.jpg",
   "message": "ECG crop + upscale completed successfully"
 }
