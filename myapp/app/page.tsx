@@ -2,6 +2,7 @@
 import React, { useState } from "react";
 import LandingPage from "@/components/LandingPage";
 import CameraPage from "@/components/CameraPage";
+import LiveFeed from "@/components/LiveFeed";
 
 export default function ECGDigitisation() {
   const [activeTab, setActiveTab] = useState("home");
@@ -9,7 +10,7 @@ export default function ECGDigitisation() {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <header className="bg-white shadow-sm border-b border-gray-200">
+      <header className="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center space-x-3">
@@ -32,6 +33,28 @@ export default function ECGDigitisation() {
                 Heartline AI
               </span>
             </div>
+            
+            <nav className="hidden md:flex items-center space-x-8">
+              <button 
+                onClick={() => setActiveTab("home")}
+                className={`text-sm font-medium transition-colors ${activeTab === 'home' ? 'text-teal-600 border-b-2 border-teal-600' : 'text-gray-500 hover:text-gray-900'}`}
+              >
+                Dashboard
+              </button>
+              <button 
+                onClick={() => setActiveTab("monitor")}
+                className={`text-sm font-medium transition-colors ${activeTab === 'monitor' ? 'text-teal-600 border-b-2 border-teal-600' : 'text-gray-500 hover:text-gray-900'}`}
+              >
+                Live Monitor
+              </button>
+              <button 
+                onClick={() => setActiveTab("capture")}
+                className={`text-sm font-medium transition-colors ${activeTab === 'capture' ? 'text-teal-600 border-b-2 border-teal-600' : 'text-gray-500 hover:text-gray-900'}`}
+              >
+                Simulator
+              </button>
+            </nav>
+
             <div className="flex items-center space-x-4">
               <button className="text-gray-700 hover:text-gray-900 font-medium">
                 Login
@@ -47,21 +70,22 @@ export default function ECGDigitisation() {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
         {activeTab === "home" && (
-          <LandingPage onGetStarted={() => setActiveTab("capture")} />
+          <LandingPage onGetStarted={() => setActiveTab("monitor")} />
         )}
+
+        {activeTab === "monitor" && <LiveFeed />}
 
         {activeTab === "capture" && <CameraPage />}
       </main>
 
       {/* Navigation Toggle (for demo) */}
-      <div className="fixed bottom-6 right-6">
+      <div className="fixed bottom-6 right-6 flex flex-col gap-3">
         <button
-          onClick={() =>
-            setActiveTab(activeTab === "home" ? "capture" : "home")
-          }
-          className="bg-gray-900 hover:bg-gray-800 text-white px-4 py-2 rounded-full shadow-lg text-sm font-medium"
+          onClick={() => setActiveTab("monitor")}
+          className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-full shadow-lg text-xs font-bold uppercase tracking-widest flex items-center gap-2"
         >
-          {activeTab === "home" ? "View Capture Page" : "Back to Home"}
+          <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
+          Live Feed
         </button>
       </div>
     </div>

@@ -22,6 +22,14 @@ def write_result(result_path: str, data: dict):
         json.dump(data, f, indent=2)
 
 
+def report_progress(step: str, data: dict = None):
+    """Print a structured progress message for the Node.js wrapper to capture."""
+    msg = {"type": "progress", "step": step}
+    if data:
+        msg.update(data)
+    print(f"PROGRESS:{json.dumps(msg)}", flush=True)
+
+
 def fallback_content_crop(image_path: Path, output_path: Path, pad: int = 16) -> bool:
     """Crop to non-white ECG content when box-based crop is unavailable."""
     img = cv2.imread(str(image_path))
@@ -107,6 +115,8 @@ def main():
         orig_img = cv2.rotate(orig_img, cv2.ROTATE_180)
         cv2.imwrite(str(input_path), orig_img)
         print(f"Rotated original image 180 degrees: {input_path}")
+    
+    report_progress("received", {"image": input_path.name})
 
     # =====================================================================
     # STEP 1 – YOLO Detect/Predict
@@ -130,6 +140,14 @@ def main():
             exist_ok=True,
         )
         print(f"YOLO predict complete. Output -> {yolo_predict_dir}")
+        
+        # Report YOLO output (the annotated image)
+        yolo_annotated = [f for f in yolo_predict_dir.iterdir() if f.suffix.lower() in (".jpg", ".jpeg", ".png")]
+        if yolo_annotated:
+            # We need to make this accessible. For now just report the filename.
+            # In STEP 1 YOLO saves to yolo_output/run_id/predict/input_id.jpg
+            rel_yolo = f"yolo_output/{run_id}/predict/{yolo_annotated[0].name}"
+            report_progress("yolo", {"image": rel_yolo})
     except Exception as e:
         write_result(str(result_path), {
             "success": False,
@@ -165,6 +183,7 @@ def main():
             else:
                 print("No box detected. Applied content-based fallback crop.")
         print(f"Crop complete. Output -> {cropped_path}")
+        report_progress("crop", {"image": cropped_path.name})
 
     except Exception as e:
         write_result(str(result_path), {
@@ -211,6 +230,7 @@ def main():
         
         cv2.imwrite(str(final_output), img_final)
         print(f"Enhancements complete. Output → {final_output}")
+        report_progress("enhanced", {"image": final_output.name})
 
     except Exception as e:
         write_result(str(result_path), {
@@ -315,6 +335,7 @@ def main():
         mask_bgr = cv2.cvtColor(clean_final, cv2.COLOR_GRAY2BGR)
         cv2.imwrite(str(mask_path), mask_bgr)
         print(f"Saved segmentation mask -> {mask_path}")
+        report_progress("mask", {"image": mask_path.name})
         
         config = DigitizerConfig(
             edge_label_zone_fraction=0.12,
@@ -330,6 +351,12 @@ def main():
         
         npz_mv_path = str(result.npz_mv_path)
         print(f"Digitization complete. NPZ Output -> {npz_mv_path}")
+        
+        # Report the overlay image (it's in the out_dir)
+        overlay_img = out_dir / "ecg_npz_overlay.png"
+        if overlay_img.exists():
+            rel_digitized = f"digitized/{run_id}/ecg_npz_overlay.png"
+            report_progress("digitized", {"image": rel_digitized, "npz": f"digitized/{run_id}/ecg_signals_mv.npz"})
 
     except Exception as e:
         write_result(str(result_path), {

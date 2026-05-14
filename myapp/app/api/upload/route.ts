@@ -3,14 +3,13 @@ import path from "path";
 import fs from "fs/promises";
 import crypto from "crypto";
 import { spawn } from "child_process";
+import { eventBus } from "@/lib/events";
 
 export async function POST(req: NextRequest) {
   try {
     const data = await req.formData();
 
     const entry = data.get("file") ?? data.get("image");
-    // `File` might not always be a reliable `instanceof` check in server runtimes;
-    // instead, accept anything that looks like a File (has `arrayBuffer()`).
     const file =
       entry &&
       typeof (entry as any).arrayBuffer === "function" &&
@@ -35,19 +34,17 @@ export async function POST(req: NextRequest) {
 
     await fs.mkdir(uploadsDir, { recursive: true });
 
-    // Save uploaded image to a temp input path (Python will stage/copy it for YOLO).
     const safeExt = path.extname(file.name || "").toLowerCase() || ".jpg";
     const uploadPath = path.join(uploadsDir, `input_${runId}${safeExt}`);
 
-    // Save image
     await fs.writeFile(uploadPath, buffer);
+
+    // Notify listeners that a new upload has started
+    eventBus.emit({ type: "start", runId, timestamp: Date.now() });
 
     const resultPath = path.join(uploadsDir, `result_${runId}.json`);
     const scriptPath = path.join(backendDir, "run_ecg_analysis.py");
-
-    // Path to your virtual environment's python executable
     const venvPythonPath = path.join(process.cwd(), "..", "env", "Scripts", "python.exe");
-
     const args = [scriptPath, "--input", uploadPath, "--run-id", runId, "--result-path", resultPath];
 
     const trySpawnPython = (pythonCmd: string) =>
@@ -69,7 +66,22 @@ export async function POST(req: NextRequest) {
         });
 
         p.stdout.on("data", (chunk) => {
-          stdoutTail += chunk.toString("utf8");
+          const text = chunk.toString("utf8");
+          stdoutTail += text;
+          
+          // Parse progress messages
+          const lines = text.split("\n");
+          for (const line of lines) {
+            if (line.startsWith("PROGRESS:")) {
+              try {
+                const progressData = JSON.parse(line.substring(9));
+                eventBus.emit({ ...progressData, runId });
+              } catch (e) {
+                console.error("Failed to parse progress JSON", e);
+              }
+            }
+          }
+
           if (stdoutTail.length > 20000) stdoutTail = stdoutTail.slice(-20000);
         });
         p.stderr.on("data", (chunk) => {
@@ -85,7 +97,6 @@ export async function POST(req: NextRequest) {
         });
       });
 
-    // 1. Try Virtual Env first, then fallback to 'python' or 'py'
     const venvAttempt = await trySpawnPython(venvPythonPath);
     const { code, stderrTail } =
       venvAttempt.code === 0 
@@ -96,6 +107,7 @@ export async function POST(req: NextRequest) {
           })();
 
     if (code !== 0) {
+      eventBus.emit({ type: "error", runId, error: "ECG analysis failed" });
       return NextResponse.json({
         success: false,
         error: "ECG analysis failed",
@@ -106,10 +118,10 @@ export async function POST(req: NextRequest) {
     const resultRaw = await fs.readFile(resultPath, "utf-8");
     const result = JSON.parse(resultRaw);
 
+    eventBus.emit({ type: "complete", runId, result });
     return NextResponse.json(result);
   } catch (error) {
     console.log(error);
-
     return NextResponse.json({
       success: false,
       error: "Upload failed",
