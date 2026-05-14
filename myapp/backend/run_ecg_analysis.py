@@ -99,8 +99,18 @@ def main():
         })
         return
 
+    # ── Mobile Upside-Down Fix ───────────────────────────────────────────
+    # The camera natively captures the landscape image upside down depending
+    # on which way the phone is turned. Rotate it 180 degrees so it's upright.
+    orig_img = cv2.imread(str(input_path))
+    if orig_img is not None:
+        orig_img = cv2.rotate(orig_img, cv2.ROTATE_180)
+        cv2.imwrite(str(input_path), orig_img)
+        print(f"Rotated original image 180 degrees: {input_path}")
+
     # =====================================================================
     # STEP 1 – YOLO Detect/Predict
+
     # =====================================================================
     print("\n" + "=" * 60)
     print("STEP 1: YOLO Detect/Predict")
@@ -210,14 +220,9 @@ def main():
         })
         return
 
-    # Read final image and rotate right (90 degrees clockwise) to correct mobile capture orientation
+    # Read final image dimensions
     final_img = cv2.imread(str(final_output))
-    if final_img is not None:
-        final_img = cv2.rotate(final_img, cv2.ROTATE_90_CLOCKWISE)
-        cv2.imwrite(str(final_output), final_img)  # Overwrite so subsequent steps use correct orientation
-        h, w = final_img.shape[:2]
-    else:
-        h, w = 0, 0
+    h, w = final_img.shape[:2] if final_img is not None else (0, 0)
 
     # =====================================================================
     # STEP 4 – Digitize ECG (Extract Signals to NPZ)
@@ -294,7 +299,8 @@ def main():
         if len(acf_peaks) > 0:
             order = np.argsort(props['peak_heights'])[::-1]
             best_period = acf_peaks[order[0]] + p_min_auto
-            px_per_mm = float(round(best_period * 2) / 2)
+            # The detected period is the major grid box (5mm), so divide by 5
+            px_per_mm = float(round(best_period * 2) / 2) / 5.0
         else:
             px_per_mm = 20.0 # fallback
         print(f"Detected px_per_mm: {px_per_mm}")
