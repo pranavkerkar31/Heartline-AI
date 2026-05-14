@@ -210,9 +210,128 @@ def main():
         })
         return
 
-    # Read final image dimensions
+    # Read final image and rotate right (90 degrees clockwise) to correct mobile capture orientation
     final_img = cv2.imread(str(final_output))
-    h, w = final_img.shape[:2] if final_img is not None else (0, 0)
+    if final_img is not None:
+        final_img = cv2.rotate(final_img, cv2.ROTATE_90_CLOCKWISE)
+        cv2.imwrite(str(final_output), final_img)  # Overwrite so subsequent steps use correct orientation
+        h, w = final_img.shape[:2]
+    else:
+        h, w = 0, 0
+
+    # =====================================================================
+    # STEP 4 – Digitize ECG (Extract Signals to NPZ)
+    # =====================================================================
+    print("\n" + "=" * 60)
+    print("STEP 4: Digitize ECG (Extract Signals to NPZ)")
+    print("=" * 60)
+
+    npz_mv_path = None
+    try:
+        import numpy as np
+        from scipy.signal import find_peaks
+        
+        # Ensure the backend directory is in path to import local ecg_digitizer
+        if str(backend_dir) not in sys.path:
+            sys.path.insert(0, str(backend_dir))
+            
+        from ecg_digitizer import run_digitization, DigitizerConfig
+
+        # 1. Run main4.py logic to get baselines and px_per_mm
+        gray = cv2.cvtColor(final_img, cv2.COLOR_BGR2GRAY)
+
+        # --- Baseline Detection ---
+        bg_gaussian = cv2.GaussianBlur(gray, (151, 151), 0)
+        bg_median   = cv2.medianBlur(gray, 51)
+        bg_combined = cv2.max(bg_gaussian, bg_median)
+        diff = cv2.subtract(bg_combined, gray)
+        diff_norm = cv2.normalize(diff, None, 0, 255, cv2.NORM_MINMAX)
+        _, binary = cv2.threshold(diff_norm, 110, 255, cv2.THRESH_BINARY)
+        
+        kernel_open  = np.ones((2, 2), np.uint8)
+        kernel_close = np.ones((3, 1), np.uint8)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN,  kernel_open,  iterations=2)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel_close, iterations=1)
+        
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+        clean_final = np.zeros_like(binary)
+        for i in range(1, num_labels):
+            if stats[i, cv2.CC_STAT_AREA] >= 50:
+                clean_final[labels == i] = 255
+
+        row_sum = np.sum(clean_final, axis=1)
+        peak_height = 0.20 * row_sum.max()
+        peaks, _    = find_peaks(row_sum, height=peak_height, distance=h//6)
+        if len(peaks) != 4:
+            all_peaks, _ = find_peaks(row_sum, height=peak_height//2, distance=h//8)
+            if len(all_peaks) >= 4:
+                top4_idx = np.argsort(row_sum[all_peaks])[-4:]
+                peaks    = np.sort(all_peaks[top4_idx])
+        baselines = [float(p) for p in peaks]
+        print(f"Detected baselines: {baselines}")
+
+        # --- Grid Detection (px_per_mm) ---
+        hist_vals  = np.bincount(gray.astype(np.uint8).ravel())
+        paper_tone = int(np.argmax(hist_vals[180:]) + 180) if len(hist_vals) > 180 else 240
+        GRID_HI    = paper_tone - 2
+        GRID_LO    = paper_tone - 40
+        grid_mask = ((gray >= GRID_LO) & (gray <= GRID_HI)).astype(np.float32)
+        col_proj  = grid_mask.sum(axis=0)
+        
+        n = len(col_proj)
+        p_arr = col_proj - col_proj.mean()
+        F = np.fft.rfft(p_arr, n=2*n)
+        acf = np.fft.irfft(F * np.conj(F))[:n].real
+        acf = acf / (acf[0] + 1e-9)
+        
+        mm_per_px  = 250.0 / w
+        px_per_mm_est  = 1.0 / mm_per_px
+        p_min_auto = max(10, int(px_per_mm_est * 0.8))
+        p_max_auto = min(150, int(px_per_mm_est * 8.0))
+        
+        search = acf[p_min_auto:p_max_auto+1]
+        acf_peaks, props = find_peaks(search, height=0.03)
+        if len(acf_peaks) > 0:
+            order = np.argsort(props['peak_heights'])[::-1]
+            best_period = acf_peaks[order[0]] + p_min_auto
+            px_per_mm = float(round(best_period * 2) / 2)
+        else:
+            px_per_mm = 20.0 # fallback
+        print(f"Detected px_per_mm: {px_per_mm}")
+
+        # 2. Save the segmentation mask and run digitizer on it
+        out_dir = uploads_dir / "digitized" / run_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        
+        mask_path = uploads_dir / f"mask_{run_id}.png"
+        
+        # Convert the 1-channel mask to 3-channel BGR (black background, white signal)
+        mask_bgr = cv2.cvtColor(clean_final, cv2.COLOR_GRAY2BGR)
+        cv2.imwrite(str(mask_path), mask_bgr)
+        print(f"Saved segmentation mask -> {mask_path}")
+        
+        config = DigitizerConfig(
+            edge_label_zone_fraction=0.12,
+            manual_px_per_mm=px_per_mm,
+            manual_baselines=baselines
+        )
+        
+        result = run_digitization(
+            input_path=str(mask_path),
+            output_dir=str(out_dir),
+            config=config
+        )
+        
+        npz_mv_path = str(result.npz_mv_path)
+        print(f"Digitization complete. NPZ Output -> {npz_mv_path}")
+
+    except Exception as e:
+        write_result(str(result_path), {
+            "success": False,
+            "error": "Digitization failed",
+            "details": str(e),
+        })
+        return
 
     write_result(str(result_path), {
         "success": True,
@@ -221,7 +340,8 @@ def main():
         "height": h,
         "processed_image": str(final_output),
         "cropped_image": str(cropped_path),
-        "message": "ECG crop + upscale completed successfully",
+        "npz_file": npz_mv_path,
+        "message": "ECG pipeline and digitization completed successfully",
     })
 
     print("\n" + "=" * 60)

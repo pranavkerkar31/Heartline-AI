@@ -1,9 +1,0 @@
-{
-  "success": true,
-  "run_id": "e6631451-ef90-4173-9c88-f0ecf2d61955",
-  "width": 7680,
-  "height": 4320,
-  "processed_image": "C:\\Users\\ashma\\OneDrive\\Documents\\github\\Heartline-AI\\myapp\\backend\\uploads\\processed_e6631451-ef90-4173-9c88-f0ecf2d61955.jpg",
-  "cropped_image": "C:\\Users\\ashma\\OneDrive\\Documents\\github\\Heartline-AI\\myapp\\backend\\uploads\\cropped_e6631451-ef90-4173-9c88-f0ecf2d61955.jpg",
-  "message": "ECG crop + upscale completed successfully"
-}

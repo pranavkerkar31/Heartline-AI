@@ -1,0 +1,10 @@
+{
+  "success": true,
+  "run_id": "e738cc46-ce4e-4590-b834-fae55241a064",
+  "width": 2990,
+  "height": 5072,
+  "processed_image": "C:\\Users\\ashma\\OneDrive\\Documents\\github\\Heartline-AI\\myapp\\backend\\uploads\\processed_e738cc46-ce4e-4590-b834-fae55241a064.jpg",
+  "cropped_image": "C:\\Users\\ashma\\OneDrive\\Documents\\github\\Heartline-AI\\myapp\\backend\\uploads\\cropped_e738cc46-ce4e-4590-b834-fae55241a064.jpg",
+  "npz_file": "C:\\Users\\ashma\\OneDrive\\Documents\\github\\Heartline-AI\\myapp\\backend\\uploads\\digitized\\e738cc46-ce4e-4590-b834-fae55241a064\\ecg_signals_mv.npz",
+  "message": "ECG pipeline and digitization completed successfully"
+}
