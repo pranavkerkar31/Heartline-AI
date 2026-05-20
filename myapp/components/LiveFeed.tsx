@@ -8,7 +8,8 @@ import {
   Scissors, 
   Layers, 
   Activity,
-  AlertCircle
+  AlertCircle,
+  X
 } from "lucide-react";
 
 interface ProcessStep {
@@ -28,7 +29,19 @@ interface Job {
 
 export default function LiveFeed() {
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [selectedImage, setSelectedImage] = useState<{ src: string; label: string } | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // Close modal on Escape key press
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setSelectedImage(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   useEffect(() => {
     console.log("LiveFeed: Initializing SSE connection...");
@@ -53,6 +66,7 @@ export default function LiveFeed() {
           timestamp: data.timestamp,
           steps: [
             { id: "received", label: "Received Photo", status: "complete", icon: ImageIcon },
+            { id: "orientation", label: "Orientation Fix", status: "waiting", icon: CheckCircle2 },
             { id: "yolo", label: "YOLO Detection", status: "waiting", icon: Maximize2 },
             { id: "crop", label: "ECG Cropping", status: "waiting", icon: Scissors },
             { id: "enhanced", label: "AI Enhancement", status: "waiting", icon: Layers },
@@ -181,13 +195,35 @@ export default function LiveFeed() {
                     </span>
 
                     {/* Step Image */}
-                    <div className="mt-4 w-full aspect-square bg-white rounded-lg border border-gray-200 overflow-hidden relative group">
+                    <div 
+                      className={`mt-4 w-full aspect-square bg-white rounded-lg border border-gray-200 overflow-hidden relative group transition-all duration-300 ${
+                        step.image 
+                          ? "cursor-zoom-in hover:border-teal-400 hover:shadow-md" 
+                          : ""
+                      }`}
+                      onClick={() => {
+                        if (step.image) {
+                          setSelectedImage({
+                            src: `/api/files/${step.image}`,
+                            label: step.label
+                          });
+                        }
+                      }}
+                    >
                       {step.image ? (
-                        <img 
-                          src={`/api/files/${step.image}`} 
-                          alt={step.label}
-                          className="w-full h-full object-cover transition-transform group-hover:scale-110"
-                        />
+                        <>
+                          <img 
+                            src={`/api/files/${step.image}`} 
+                            alt={step.label}
+                            className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                          />
+                          {/* Hover Overlay */}
+                          <div className="absolute inset-0 bg-black/10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                            <div className="bg-white/90 backdrop-blur-sm p-1.5 rounded-lg shadow-sm">
+                              <Maximize2 className="w-4 h-4 text-gray-700" />
+                            </div>
+                          </div>
+                        </>
                       ) : step.status === "processing" ? (
                         <div className="w-full h-full flex items-center justify-center bg-blue-50">
                           <Loader2 className="w-8 h-8 text-blue-400 animate-spin" />
@@ -211,6 +247,42 @@ export default function LiveFeed() {
           )}
         </div>
       ))}
+
+      {/* Lightbox / Maximized Image Modal */}
+      {selectedImage && (
+        <div 
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/90 backdrop-blur-md animate-in fade-in duration-200 cursor-zoom-out"
+          onClick={() => setSelectedImage(null)}
+        >
+          {/* Close Button */}
+          <button 
+            className="absolute top-6 right-6 text-white hover:text-red-400 p-3 rounded-full hover:bg-white/10 transition-all duration-200 z-50 cursor-pointer"
+            onClick={(e) => {
+              e.stopPropagation();
+              setSelectedImage(null);
+            }}
+          >
+            <X className="w-8 h-8" />
+          </button>
+
+          {/* Image Wrapper to prevent click propagation outside image */}
+          <div 
+            className="relative max-w-[90vw] max-h-[80vh] flex items-center justify-center p-2 animate-in zoom-in-95 duration-200 cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img 
+              src={selectedImage.src} 
+              alt={selectedImage.label}
+              className="max-w-full max-h-[80vh] object-contain rounded-xl shadow-2xl border border-white/10"
+            />
+          </div>
+
+          {/* Caption */}
+          <div className="mt-6 bg-black/60 border border-white/10 backdrop-blur-sm text-white px-6 py-2 rounded-full text-base font-semibold tracking-wide shadow-xl select-none">
+            {selectedImage.label}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

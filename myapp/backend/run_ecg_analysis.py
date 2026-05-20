@@ -9,6 +9,7 @@ Pipeline:
 
 import argparse
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -60,6 +61,189 @@ def fallback_content_crop(image_path: Path, output_path: Path, pad: int = 16) ->
     return cv2.imwrite(str(output_path), cropped)
 
 
+def auto_rotate_to_upright(image_path: Path) -> dict:
+    """
+    Detect text orientation by voting across all right-angle rotations.
+
+    ECG reports contain small labels over graph paper, so raw Tesseract output can
+    be empty unless the image is contrast-normalized first. Known report words are
+    weighted more heavily than plain character count to avoid grid/trace noise.
+    """
+    try:
+        import pytesseract
+    except ImportError:
+        print("pytesseract package is not installed. Run `pip install pytesseract` to enable auto-rotation.")
+        return {"success": False, "error": "pytesseract not installed", "rotated": False}
+
+    img = cv2.imread(str(image_path))
+    if img is None:
+        return {"success": False, "error": "Could not read image", "rotated": False}
+
+    try:
+        from PIL import Image, ImageOps
+
+        with Image.open(image_path) as pil_img:
+            exif_orientation = pil_img.getexif().get(274)
+            if exif_orientation and exif_orientation != 1:
+                ImageOps.exif_transpose(pil_img).save(image_path)
+                img = cv2.imread(str(image_path))
+                print(f"Applied EXIF orientation tag: {exif_orientation}")
+    except Exception as e:
+        print(f"EXIF orientation normalization skipped: {e}")
+
+    tesseract_cmd_candidates = [
+        "tesseract",
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        r"C:\ProgramData\chocolatey\bin\tesseract.exe",
+    ]
+
+    tesseract_working_cmd = None
+    for cmd in tesseract_cmd_candidates:
+        try:
+            pytesseract.pytesseract.tesseract_cmd = cmd
+            pytesseract.get_tesseract_version()
+            tesseract_working_cmd = cmd
+            break
+        except Exception:
+            continue
+
+    if not tesseract_working_cmd:
+        print("\n" + "!" * 80)
+        print("TESSERACT OCR IS NOT INSTALLED OR NOT FOUND.")
+        print("Please install Tesseract OCR on Windows to enable automatic orientation detection:")
+        print("1. Download installer from: https://github.com/UB-Mannheim/tesseract/wiki")
+        print("2. Or run in an Administrator command prompt: winget install UB-Mannheim.TesseractOCR")
+        print("!" * 80 + "\n")
+        return {"success": False, "error": "Tesseract binary not found", "rotated": False}
+
+    try:
+        print(f"Running Robust Text-Based Orientation Detection on: {image_path.name}")
+
+        rotations = [
+            (0, None),
+            (90, cv2.ROTATE_90_CLOCKWISE),
+            (180, cv2.ROTATE_180),
+            (270, cv2.ROTATE_90_COUNTERCLOCKWISE),
+        ]
+        keyword_pattern = re.compile(
+            r"\b("
+            r"ECG|EKG|REPORT|Patient|Technician|Confirmed|Room|Years|Male|Female|"
+            r"mmHg|cm|kg|Medication|Diagnosis|Information|Department|Ref|Phys|"
+            r"aVR|aVL|aVF|V[1-6]"
+            r")\b",
+            re.IGNORECASE,
+        )
+        config = "--oem 3 --psm 11 -c preserve_interword_spaces=1"
+
+        def resize_for_ocr(gray_img):
+            max_dim = 2400
+            h_g, w_g = gray_img.shape
+            if max(h_g, w_g) <= max_dim:
+                return gray_img
+            scale = max_dim / max(h_g, w_g)
+            return cv2.resize(
+                gray_img,
+                (int(w_g * scale), int(h_g * scale)),
+                interpolation=cv2.INTER_AREA,
+            )
+
+        def ocr_variants(candidate_img):
+            gray_img = cv2.cvtColor(candidate_img, cv2.COLOR_BGR2GRAY)
+            gray_img = resize_for_ocr(gray_img)
+            gray_img = cv2.normalize(gray_img, None, 0, 255, cv2.NORM_MINMAX)
+            denoised = cv2.GaussianBlur(gray_img, (3, 3), 0)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(denoised)
+            binary = cv2.adaptiveThreshold(
+                clahe,
+                255,
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY,
+                31,
+                11,
+            )
+            return [clahe, binary]
+
+        best = {
+            "angle": 0,
+            "score": -1,
+            "chars": 0,
+            "keywords": 0,
+        }
+
+        for angle, cv2_rot in rotations:
+            candidate = img if cv2_rot is None else cv2.rotate(img, cv2_rot)
+            angle_chars = 0
+            angle_keywords = 0
+
+            for variant in ocr_variants(candidate):
+                text = pytesseract.image_to_string(variant, config=config, timeout=10)
+                alnum_count = sum(c.isalnum() for c in text)
+                keyword_count = len(keyword_pattern.findall(text))
+                angle_chars = max(angle_chars, alnum_count)
+                angle_keywords = max(angle_keywords, keyword_count)
+
+            score = angle_chars + (angle_keywords * 250)
+            print(
+                f"Debug [Angle {angle} deg]: "
+                f"chars={angle_chars}, keywords={angle_keywords}, score={score}"
+            )
+
+            if score > best["score"]:
+                best = {
+                    "angle": angle,
+                    "score": score,
+                    "chars": angle_chars,
+                    "keywords": angle_keywords,
+                }
+
+        best_angle = best["angle"]
+        max_alnum = best["chars"]
+        print(
+            "Robust Orientation Result: "
+            f"Best Angle={best_angle} deg, Chars={best['chars']}, "
+            f"Keywords={best['keywords']}, Score={best['score']}"
+        )
+
+        if best["score"] < 10:
+            print("Low OCR confidence. Falling back to aspect-ratio.")
+            h, w = img.shape[:2]
+            best_angle = 90 if h > w else 0
+
+        if best_angle != 0:
+            if best_angle == 90:
+                rotated_img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+            elif best_angle == 180:
+                rotated_img = cv2.rotate(img, cv2.ROTATE_180)
+            elif best_angle == 270:
+                rotated_img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+            cv2.imwrite(str(image_path), rotated_img)
+            print(f"Successfully rotated image {best_angle} degrees.")
+            return {
+                "success": True,
+                "rotated": True,
+                "angle": best_angle,
+                "chars": max_alnum,
+                "keywords": best["keywords"],
+                "score": best["score"],
+            }
+
+        print("Image is already upright. No rotation needed.")
+        return {
+            "success": True,
+            "rotated": False,
+            "angle": 0,
+            "chars": max_alnum,
+            "keywords": best["keywords"],
+            "score": best["score"],
+        }
+
+    except Exception as e:
+        print(f"Error during Tesseract orientation detection: {e}")
+        return {"success": False, "error": str(e), "rotated": False}
+
+
 def main():
     parser = argparse.ArgumentParser(description="ECG Crop + Upscale Pipeline")
     parser.add_argument("--input", help="Path to input ECG image (optional; defaults to backend/uploads/ecg.jpg)")
@@ -107,16 +291,22 @@ def main():
         })
         return
 
-    # ── Mobile Upside-Down Fix ───────────────────────────────────────────
-    # The camera natively captures the landscape image upside down depending
-    # on which way the phone is turned. Rotate it 180 degrees so it's upright.
-    orig_img = cv2.imread(str(input_path))
-    if orig_img is not None:
-        orig_img = cv2.rotate(orig_img, cv2.ROTATE_180)
-        cv2.imwrite(str(input_path), orig_img)
-        print(f"Rotated original image 180 degrees: {input_path}")
-    
     report_progress("received", {"image": input_path.name})
+
+    # ── Dynamic Orientation Correction (Tesseract & OpenCV) ──────────────
+    print("Trusting Robust OCR Voting for complete orientation handling...")
+    osd_result = auto_rotate_to_upright(input_path)
+    if not osd_result.get("success"):
+        print("Tesseract was not available or failed to detect orientation. Image left as is.")
+        
+    # Generate Debug Image
+    debug_path = uploads_dir / f"orientation_{run_id}.jpg"
+    dbg_img = cv2.imread(str(input_path))
+    if dbg_img is not None:
+        cv2.putText(dbg_img, f"Rotated: {osd_result.get('angle', 0)} deg", (50, 150), cv2.FONT_HERSHEY_SIMPLEX, 4, (0, 0, 255), 10)
+        cv2.putText(dbg_img, f"Confidence: {osd_result.get('chars', 0)} chars", (50, 300), cv2.FONT_HERSHEY_SIMPLEX, 4, (0, 0, 255), 10)
+        cv2.imwrite(str(debug_path), dbg_img)
+        report_progress("orientation", {"image": debug_path.name})
 
     # =====================================================================
     # STEP 1 – YOLO Detect/Predict
