@@ -24,6 +24,7 @@ preprocessing/no_grid_ecg/
 preprocessing/processed_images/
 uploads/work_1444c46d-b7a8-4d59-8521-53282922097d
 uploads/result_1444c46d-b7a8-4d59-8521-53282922097d.json
+uploads
 # Logs
 *.log
 
