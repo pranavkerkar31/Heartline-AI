@@ -85,7 +85,11 @@ def auto_rotate_to_upright(image_path: Path) -> dict:
         with Image.open(image_path) as pil_img:
             exif_orientation = pil_img.getexif().get(274)
             if exif_orientation and exif_orientation != 1:
-                ImageOps.exif_transpose(pil_img).save(image_path)
+                transposed = ImageOps.exif_transpose(pil_img)
+                save_kwargs = {}
+                if image_path.suffix.lower() in (".jpg", ".jpeg"):
+                    save_kwargs = {"quality": 95, "subsampling": 0}
+                transposed.save(image_path, **save_kwargs)
                 img = cv2.imread(str(image_path))
                 print(f"Applied EXIF orientation tag: {exif_orientation}")
     except Exception as e:
@@ -177,7 +181,11 @@ def auto_rotate_to_upright(image_path: Path) -> dict:
             angle_keywords = 0
 
             for variant in ocr_variants(candidate):
-                text = pytesseract.image_to_string(variant, config=config, timeout=10)
+                try:
+                    text = pytesseract.image_to_string(variant, config=config, timeout=10)
+                except RuntimeError as e:
+                    print(f"Tesseract skipped angle {angle} variant: {e}")
+                    continue
                 alnum_count = sum(c.isalnum() for c in text)
                 keyword_count = len(keyword_pattern.findall(text))
                 angle_chars = max(angle_chars, alnum_count)
