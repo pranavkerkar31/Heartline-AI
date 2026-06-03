@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState } from "react";
 import { 
   Loader2, 
   CheckCircle2, 
@@ -9,15 +9,20 @@ import {
   Layers, 
   Activity,
   AlertCircle,
-  X
+  X,
+  HeartPulse,
+  type LucideIcon
 } from "lucide-react";
+import ECGReconstructionViewer from "./ECGReconstructionViewer";
 
 interface ProcessStep {
   id: string;
   label: string;
   status: "waiting" | "processing" | "complete" | "error";
   image?: string;
-  icon: any;
+  previewSrc?: string;
+  npz?: string;
+  icon: LucideIcon;
 }
 
 interface Job {
@@ -30,8 +35,6 @@ interface Job {
 export default function LiveFeed() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [selectedImage, setSelectedImage] = useState<{ src: string; label: string } | null>(null);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-
   // Close modal on Escape key press
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -72,6 +75,7 @@ export default function LiveFeed() {
             { id: "enhanced", label: "AI Enhancement", status: "waiting", icon: Layers },
             { id: "mask", label: "Segmentation", status: "waiting", icon: Activity },
             { id: "digitized", label: "Digitizer Output", status: "waiting", icon: CheckCircle2 },
+            { id: "reconstruction", label: "ECG Reconstruction", status: "waiting", icon: HeartPulse },
           ],
         };
         setJobs((prev) => [newJob, ...prev].slice(0, 5)); // Keep last 5 jobs
@@ -79,13 +83,21 @@ export default function LiveFeed() {
         setJobs((prev) => {
           return prev.map((job) => {
             if (job.runId === data.runId) {
+              const completedStepIndex = job.steps.findIndex(s => s.id === data.step);
+              const reconstructionStepIndex = job.steps.findIndex(s => s.id === "reconstruction");
               const newSteps = job.steps.map((step) => {
                 if (step.id === data.step) {
-                  return { ...step, status: "complete" as const, image: data.image };
+                  return { ...step, status: "complete" as const, image: data.image, npz: data.npz };
+                }
+                if (data.step === "digitized" && step.id === "reconstruction" && data.npz) {
+                  return { ...step, status: "complete" as const, npz: data.npz };
                 }
                 // Mark current and previous steps
                 const stepIndex = job.steps.findIndex(s => s.id === step.id);
-                const currentStepIndex = job.steps.findIndex(s => s.id === data.step);
+                const currentStepIndex =
+                  data.step === "digitized" && data.npz
+                    ? reconstructionStepIndex
+                    : completedStepIndex;
                 
                 if (stepIndex < currentStepIndex) {
                   return { ...step, status: "complete" as const };
@@ -117,6 +129,21 @@ export default function LiveFeed() {
 
     return () => eventSource.close();
   }, []);
+
+  const updateStepPreview = (runId: string, stepId: string, previewSrc: string) => {
+    setJobs((prev) =>
+      prev.map((job) =>
+        job.runId === runId
+          ? {
+              ...job,
+              steps: job.steps.map((step) =>
+                step.id === stepId ? { ...step, previewSrc } : step
+              ),
+            }
+          : job
+      )
+    );
+  };
 
   if (jobs.length === 0) {
     return (
@@ -168,9 +195,10 @@ export default function LiveFeed() {
 
           {/* Steps Grid */}
           <div className="p-6">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-8 gap-6">
               {job.steps.map((step) => {
                 const Icon = step.icon;
+                const previewSrc = step.previewSrc ?? (step.image ? `/api/files/${step.image}` : "");
                 return (
                   <div 
                     key={step.id} 
@@ -197,23 +225,37 @@ export default function LiveFeed() {
                     {/* Step Image */}
                     <div 
                       className={`mt-4 w-full aspect-square bg-white rounded-lg border border-gray-200 overflow-hidden relative group transition-all duration-300 ${
-                        step.image 
+                        previewSrc || step.npz
                           ? "cursor-zoom-in hover:border-teal-400 hover:shadow-md" 
                           : ""
                       }`}
                       onClick={() => {
-                        if (step.image) {
+                        if (previewSrc) {
                           setSelectedImage({
-                            src: `/api/files/${step.image}`,
+                            src: previewSrc,
                             label: step.label
                           });
                         }
                       }}
                     >
-                      {step.image ? (
+                      {step.id === "reconstruction" && step.status === "complete" ? (
+                        <>
+                          <ECGReconstructionViewer
+                            runId={job.runId}
+                            onPreviewReady={(dataUrl) =>
+                              updateStepPreview(job.runId, step.id, dataUrl)
+                            }
+                          />
+                          <div className="absolute inset-0 bg-black/10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                            <div className="bg-white/90 backdrop-blur-sm p-1.5 rounded-lg shadow-sm">
+                              <Maximize2 className="w-4 h-4 text-gray-700" />
+                            </div>
+                          </div>
+                        </>
+                      ) : step.image ? (
                         <>
                           <img 
-                            src={`/api/files/${step.image}`} 
+                            src={previewSrc} 
                             alt={step.label}
                             className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
                           />

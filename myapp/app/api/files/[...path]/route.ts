@@ -2,16 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import fs from "fs/promises";
 import { createReadStream } from "fs";
+import { Readable } from "stream";
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { path: string[] } }
+  { params }: { params: Promise<{ path: string[] }> }
 ) {
   try {
-    // Await params as per Next.js 15+ standards if needed, 
-    // but here we just access them. 
-    // Wait, in Next.js 15 params is a promise. 
-    const resolvedParams = await (params as any);
+    const resolvedParams = await params;
     const filePath = path.join(process.cwd(), "backend", "uploads", ...resolvedParams.path);
 
     // Basic security: ensure the path is inside backend/uploads
@@ -38,13 +36,13 @@ export async function GET(
       ".npz": "application/octet-stream",
     }[ext] || "application/octet-stream";
 
-    return new NextResponse(stream as any, {
+    return new NextResponse(Readable.toWeb(stream) as ReadableStream, {
       headers: {
         "Content-Type": contentType,
         "Content-Length": stats.size.toString(),
       },
     });
-  } catch (error) {
+  } catch {
     return new NextResponse("Not Found", { status: 404 });
   }
 }
