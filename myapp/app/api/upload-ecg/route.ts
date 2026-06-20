@@ -8,20 +8,10 @@ import { eventBus } from "@/lib/events";
 export async function POST(req: NextRequest) {
   try {
     const data = await req.formData();
+    const file = data.get("file");
 
-    const entry = data.get("file") ?? data.get("image");
-    const file =
-      entry &&
-      typeof (entry as any).arrayBuffer === "function" &&
-      typeof (entry as any).name === "string"
-        ? (entry as File)
-        : null;
-
-    if (!file) {
-      return NextResponse.json({
-        success: false,
-        error: "No image uploaded",
-      });
+    if (!file || !(file instanceof File)) {
+      return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
     }
 
     // Convert image to buffer
@@ -34,9 +24,13 @@ export async function POST(req: NextRequest) {
 
     await fs.mkdir(uploadsDir, { recursive: true });
 
+    // Save under the original file name for backward-compatibility
+    const originalUploadPath = path.join(uploadsDir, file.name);
+    await fs.writeFile(originalUploadPath, buffer);
+
+    // Save with the run ID for the processing pipeline
     const safeExt = path.extname(file.name || "").toLowerCase() || ".jpg";
     const uploadPath = path.join(uploadsDir, `input_${runId}${safeExt}`);
-
     await fs.writeFile(uploadPath, buffer);
 
     // Notify listeners that a new upload has started
@@ -112,19 +106,21 @@ export async function POST(req: NextRequest) {
         success: false,
         error: "ECG analysis failed",
         details: stderrTail,
-      });
+      }, { status: 500 });
     }
 
     const resultRaw = await fs.readFile(resultPath, "utf-8");
     const result = JSON.parse(resultRaw);
 
     eventBus.emit({ type: "complete", runId, result });
-    return NextResponse.json(result);
-  } catch (error) {
-    console.log(error);
+
     return NextResponse.json({
-      success: false,
-      error: "Upload failed",
+      message: "File uploaded successfully",
+      filename: file.name,
+      ...result
     });
+  } catch (error: any) {
+    console.error(error);
+    return NextResponse.json({ error: "Upload failed", details: error.message }, { status: 500 });
   }
 }
