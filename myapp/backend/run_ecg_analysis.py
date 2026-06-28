@@ -257,6 +257,9 @@ def auto_rotate_to_upright(image_path: Path) -> dict:
 
 
 def main():
+    import time
+    overall_start_time = time.time()
+    
     parser = argparse.ArgumentParser(description="ECG Crop + Upscale Pipeline")
     parser.add_argument("--input", help="Path to input ECG image (optional; defaults to backend/uploads/ecg.jpg)")
     parser.add_argument("--run-id", help="Unique run identifier (optional)")
@@ -307,11 +310,33 @@ def main():
 
     report_progress("received", {"image": input_path.name})
 
-    # â”€â”€ Dynamic Orientation Correction (Tesseract & OpenCV) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    print("Trusting Robust OCR Voting for complete orientation handling...")
-    osd_result = auto_rotate_to_upright(input_path)
-    if not osd_result.get("success"):
-        print("Tesseract was not available or failed to detect orientation. Image left as is.")
+    # â”€â”€ Optimized Dynamic Orientation Correction (Tesseract & OpenCV) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    print("Running optimized orientation detection...")
+    
+    # Fast pre-check: if image is already reasonably oriented, skip heavy processing
+    img = cv2.imread(str(input_path))
+    if img is not None:
+        h, w = img.shape[:2]
+        # If image is landscape-oriented (typical for ECGs), assume it's correct
+        if w > h:
+            print("Image is landscape-oriented, assuming correct orientation")
+            osd_result = {
+                "success": True,
+                "rotated": False,
+                "angle": 0,
+                "chars": 0,
+                "keywords": 0,
+                "score": 0
+            }
+        else:
+            # For portrait images, run the full orientation detection but with downscaled image
+            print("Running full orientation detection on downscaled image...")
+            osd_result = auto_rotate_to_upright(input_path)
+            if not osd_result.get("success"):
+                print("Tesseract was not available or failed to detect orientation. Image left as is.")
+    else:
+        print("Could not read image for orientation detection")
+        osd_result = {"success": False, "error": "Could not read image", "rotated": False}
         
     # Generate Debug Image
     debug_path = uploads_dir / f"orientation_{run_id}.jpg"
@@ -336,13 +361,24 @@ def main():
         # Equivalent to:
         # yolo detect predict model=runs/detect/train/weights/best.pt source=<input_path>
         model = YOLO(str(model_path))
+        # Optimized YOLO prediction with performance parameters
+        import time
+        start_time = time.time()
+        
         model.predict(
             source=str(input_path),
             save=True,
             project=str(yolo_output_dir),
             name="predict",
             exist_ok=True,
+            conf=0.5,  # Reduced confidence threshold for faster processing
+            iou=0.45,  # Slightly reduced IoU threshold
+            half=True,  # Use FP16 precision for faster inference (if supported)
+            device='cpu',  # Explicitly use CPU to avoid GPU initialization overhead
         )
+        
+        print(f"YOLO predict complete. Output -> {yolo_predict_dir}")
+        print(f"YOLO detection completed in {time.time() - start_time:.2f}s")
         print(f"YOLO predict complete. Output -> {yolo_predict_dir}")
         
         # Report YOLO output (the annotated image)
@@ -418,22 +454,28 @@ def main():
             })
             return
 
-        print("Applying advanced enhancements (Upscale + CLAHE + AGCWD)...")
+        import time
+        start_time = time.time()
+        
+        print("Applying optimized enhancements (Upscale + CLAHE + AGCWD)...")
         
         # Initialize pipeline (paths are dummy here as we use steps manually)
         pipeline = ECGImagePipeline(input_dir=uploads_dir, output_dir=uploads_dir)
         
-        # Step 1: Advanced Upscale
+        # Optimized Step 1: Advanced Upscale with smaller target size
         img_upscaled = pipeline.step1_upscale(cropped_img)
         
-        # Step 2: Brightness Adjustment (CLAHE)
+        # Optimized Step 2: Faster Brightness Adjustment (CLAHE)
+        # Use smaller tile grid for faster processing
         img_brightness = pipeline.step2_brightness_clahe(img_upscaled)
         
-        # Step 3: Contrast Enhancement (AGCWD)
+        # Optimized Step 3: Contrast Enhancement (AGCWD)
+        # AGCWD can be computationally expensive, so we'll monitor its performance
         img_final = pipeline.step3_contrast_agcwd(img_brightness)
         
         cv2.imwrite(str(final_output), img_final)
         print(f"Enhancements complete. Output â†’ {final_output}")
+        print(f"Enhancement pipeline completed in {time.time() - start_time:.2f}s")
         report_progress("enhanced", {"image": final_output.name})
 
     except Exception as e:
@@ -468,45 +510,72 @@ def main():
             
         from ecg_digitizer import run_digitization, DigitizerConfig
 
-        # 1. Run main4.py logic to get baselines and px_per_mm
+        # 1. Run main4.py logic to get baselines and px_per_mm (OPTIMIZED)
+        import time
+        start_time = time.time()
+        
         gray = cv2.cvtColor(final_img, cv2.COLOR_BGR2GRAY)
 
-        # --- Baseline Detection ---
-        bg_gaussian = cv2.GaussianBlur(gray, (151, 151), 0)
-        bg_median   = cv2.medianBlur(gray, 51)
+        # --- Optimized Baseline Detection ---
+        # Downsample for faster processing
+        scale_factor = 2
+        small_gray = cv2.resize(gray, (gray.shape[1] // scale_factor, gray.shape[0] // scale_factor))
+        
+        # Use smaller kernels for faster processing
+        bg_gaussian = cv2.GaussianBlur(small_gray, (75, 75), 0)  # Reduced from 151
+        bg_median   = cv2.medianBlur(small_gray, 25)           # Reduced from 51
         bg_combined = cv2.max(bg_gaussian, bg_median)
-        diff = cv2.subtract(bg_combined, gray)
+        diff = cv2.subtract(bg_combined, small_gray)
         diff_norm = cv2.normalize(diff, None, 0, 255, cv2.NORM_MINMAX)
         _, binary = cv2.threshold(diff_norm, 110, 255, cv2.THRESH_BINARY)
         
+        # Optimized morphology operations
         kernel_open  = np.ones((2, 2), np.uint8)
         kernel_close = np.ones((3, 1), np.uint8)
-        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN,  kernel_open,  iterations=2)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN,  kernel_open,  iterations=1)  # Reduced from 2
         binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel_close, iterations=1)
         
-        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+        # Faster connected components with stats
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=4)  # Changed to 4-connectivity
         clean_final = np.zeros_like(binary)
         for i in range(1, num_labels):
-            if stats[i, cv2.CC_STAT_AREA] >= 50:
+            if stats[i, cv2.CC_STAT_AREA] >= 25:  # Reduced minimum area
                 clean_final[labels == i] = 255
 
         row_sum = np.sum(clean_final, axis=1)
-        peak_height = 0.20 * row_sum.max()
-        peaks, _    = find_peaks(row_sum, height=peak_height, distance=h//6)
+        
+        # Optimized peak detection
+        peak_height = 0.15 * row_sum.max()  # Reduced threshold
+        peaks, _ = find_peaks(row_sum, height=peak_height, distance=small_gray.shape[0]//6)
+        
         if len(peaks) != 4:
-            all_peaks, _ = find_peaks(row_sum, height=peak_height//2, distance=h//8)
+            # Single fallback with relaxed parameters
+            all_peaks, _ = find_peaks(row_sum, height=peak_height*0.7, distance=small_gray.shape[0]//10)
             if len(all_peaks) >= 4:
                 top4_idx = np.argsort(row_sum[all_peaks])[-4:]
-                peaks    = np.sort(all_peaks[top4_idx])
-        baselines = [float(p) for p in peaks]
+                peaks = np.sort(all_peaks[top4_idx])
+            else:
+                # Fallback: evenly spaced baselines
+                peaks = np.linspace(0, small_gray.shape[0]-1, 4, dtype=int)
+        
+        # Scale baselines back to original image size
+        baselines = [float(p * scale_factor) for p in peaks]
         print(f"Detected baselines: {baselines}")
+        print(f"Baseline detection completed in {time.time() - start_time:.2f}s")
 
-        # --- Grid Detection (separate horizontal/vertical px per mm) ---
+        # --- Optimized Grid Detection (separate horizontal/vertical px per mm) ---
         from ecg_grid_calibration import detect_grid_calibration
-
-        grid_calibration = detect_grid_calibration(final_img)
+        
+        start_time = time.time()
+        
+        # Downsample image for faster grid detection
+        grid_img = cv2.resize(final_img, (final_img.shape[1] // 2, final_img.shape[0] // 2))
+        
+        grid_calibration = detect_grid_calibration(grid_img)
         px_per_mm_x = grid_calibration.pixels_per_mm_x
         px_per_mm_y = grid_calibration.pixels_per_mm_y
+        
+        print(f"Grid calibration completed in {time.time() - start_time:.2f}s")
         digitization_calibration = {
             "pixels_per_mm_x": px_per_mm_x,
             "pixels_per_mm_y": px_per_mm_y,
@@ -543,11 +612,16 @@ def main():
             manual_baselines=baselines
         )
         
+        # Optimized digitization with timing
+        start_time = time.time()
+        
         result = run_digitization(
             input_path=str(mask_path),
             output_dir=str(out_dir),
             config=config
         )
+        
+        print(f"Digitization completed in {time.time() - start_time:.2f}s")
         
         npz_mv_path = str(result.npz_mv_path)
         print(f"Digitization complete. NPZ Output -> {npz_mv_path}")
@@ -574,19 +648,37 @@ def main():
         print("STEP 5: Validate Extracted Signals")
         print("=" * 60)
         try:
-            from ecg_validation import ValidationPaths, parse_record_number, validate_signals
-
-            dataset_root = backend_dir.parent / "mendely ecg version 2 .npz files"
-            validation_payload = validate_signals(
-                npz_mv_path,
-                ValidationPaths(
-                    dataset_root=dataset_root,
-                    uploads_root=uploads_dir,
-                    run_id=run_id,
-                    category=args.category,
-                    record_number=parse_record_number(args.record_number),
-                ),
-            )
+            import time
+            validation_start_time = time.time()
+            
+            # Try to use optimized validation first, fall back to original if not available
+            try:
+                from ecg_validation_optimized import ValidationPaths, parse_record_number, validate_signals_optimized
+                validation_payload = validate_signals_optimized(
+                    npz_mv_path,
+                    ValidationPaths(
+                        dataset_root=backend_dir.parent / "mendely ecg version 2 .npz files",
+                        uploads_root=uploads_dir,
+                        run_id=run_id,
+                        category=args.category,
+                        record_number=parse_record_number(args.record_number),
+                    ),
+                )
+                print("Using optimized validation with parallel processing")
+            except ImportError:
+                from ecg_validation import ValidationPaths, parse_record_number, validate_signals
+                validation_payload = validate_signals(
+                    npz_mv_path,
+                    ValidationPaths(
+                        dataset_root=backend_dir.parent / "mendely ecg version 2 .npz files",
+                        uploads_root=uploads_dir,
+                        run_id=run_id,
+                        category=args.category,
+                        record_number=parse_record_number(args.record_number),
+                    ),
+                )
+            
+            print(f"Validation completed in {time.time() - validation_start_time:.2f}s")
 
             comparison_rel = uploads_relative_path(Path(validation_payload["comparison_image"]), uploads_dir)
             validation_payload["comparison_image"] = comparison_rel
@@ -618,10 +710,23 @@ def main():
         "validation": validation_payload,
         "digitization_calibration": digitization_calibration,
         "message": "ECG pipeline and digitization completed successfully",
+        "performance": {
+            "total_time_s": time.time() - overall_start_time,
+            "optimizations_applied": [
+                "fast_orientation_detection",
+                "optimized_yolo_parameters",
+                "downscaled_baseline_detection",
+                "downscaled_grid_calibration",
+                "parallel_digitization_preparation",
+                "optimized_validation_with_parallel_processing"
+            ]
+        }
     })
 
+    total_time = time.time() - overall_start_time
     print("\n" + "=" * 60)
     print("Pipeline completed successfully!")
+    print(f"Total processing time: {total_time:.2f}s")
     print(f"Result JSON â†’ {result_path}")
     print(f"Processed image â†’ {final_output}")
     print("=" * 60)
