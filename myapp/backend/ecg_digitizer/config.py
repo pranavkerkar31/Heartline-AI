@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,6 +43,8 @@ class DigitizerConfig:
     )
 
     manual_px_per_mm: float | None = None
+    manual_px_per_mm_x: float | None = None
+    manual_px_per_mm_y: float | None = None
     manual_baselines: list[float] | None = None
 
     trace_brightness_min: int = 135
