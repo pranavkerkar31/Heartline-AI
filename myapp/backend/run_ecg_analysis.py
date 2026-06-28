@@ -1,10 +1,10 @@
-"""
-run_ecg_analysis.py  –  ECG Analysis Pipeline Orchestrator
+﻿"""
+run_ecg_analysis.py  â€“  ECG Analysis Pipeline Orchestrator
 
 Pipeline:
-    1. YOLO predict    → generate annotated ECG detection image
-    2. crop_ecg        → crop ECG region
-    3. upscale         → upscale the cropped image
+    1. YOLO predict    â†’ generate annotated ECG detection image
+    2. crop_ecg        â†’ crop ECG region
+    3. upscale         â†’ upscale the cropped image
 """
 
 import argparse
@@ -29,6 +29,10 @@ def report_progress(step: str, data: dict = None):
     if data:
         msg.update(data)
     print(f"PROGRESS:{json.dumps(msg)}", flush=True)
+
+
+def uploads_relative_path(file_path: Path, uploads_dir: Path) -> str:
+    return file_path.resolve().relative_to(uploads_dir.resolve()).as_posix()
 
 
 def fallback_content_crop(image_path: Path, output_path: Path, pad: int = 16) -> bool:
@@ -257,9 +261,11 @@ def main():
     parser.add_argument("--input", help="Path to input ECG image (optional; defaults to backend/uploads/ecg.jpg)")
     parser.add_argument("--run-id", help="Unique run identifier (optional)")
     parser.add_argument("--result-path", help="Path to write result JSON (optional)")
+    parser.add_argument("--category", help="Dataset category for validation (optional)")
+    parser.add_argument("--record-number", help="Dataset record number for validation (optional)")
     args = parser.parse_args()
 
-    # ── Paths ────────────────────────────────────────────────────────────
+    # â”€â”€ Paths â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     backend_dir = Path(__file__).resolve().parent  # myapp/backend
     uploads_dir = backend_dir / "uploads"
     preprocessing_dir = backend_dir / "preprocessing"
@@ -283,7 +289,7 @@ def main():
         else (uploads_dir / f"result_{run_id}.json").resolve()
     )
 
-    # ── Sanity checks ────────────────────────────────────────────────────
+    # â”€â”€ Sanity checks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if not input_path.exists():
         write_result(str(result_path), {
             "success": False,
@@ -301,7 +307,7 @@ def main():
 
     report_progress("received", {"image": input_path.name})
 
-    # ── Dynamic Orientation Correction (Tesseract & OpenCV) ──────────────
+    # â”€â”€ Dynamic Orientation Correction (Tesseract & OpenCV) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     print("Trusting Robust OCR Voting for complete orientation handling...")
     osd_result = auto_rotate_to_upright(input_path)
     if not osd_result.get("success"):
@@ -317,7 +323,7 @@ def main():
         report_progress("orientation", {"image": debug_path.name})
 
     # =====================================================================
-    # STEP 1 – YOLO Detect/Predict
+    # STEP 1 â€“ YOLO Detect/Predict
 
     # =====================================================================
     print("\n" + "=" * 60)
@@ -361,7 +367,7 @@ def main():
     yolo_crop_source = predicted_images[0] if predicted_images else input_path
 
     # =====================================================================
-    # STEP 2 – Crop ECG Region
+    # STEP 2 â€“ Crop ECG Region
     # =====================================================================
     print("\n" + "=" * 60)
     print("STEP 2: Crop ECG Region")
@@ -392,7 +398,7 @@ def main():
         return
 
     # =====================================================================
-    # STEP 3 – Upscale
+    # STEP 3 â€“ Upscale
     # =====================================================================
     print("\n" + "=" * 60)
     print("STEP 3: Upscale Cropped ECG")
@@ -427,7 +433,7 @@ def main():
         img_final = pipeline.step3_contrast_agcwd(img_brightness)
         
         cv2.imwrite(str(final_output), img_final)
-        print(f"Enhancements complete. Output → {final_output}")
+        print(f"Enhancements complete. Output â†’ {final_output}")
         report_progress("enhanced", {"image": final_output.name})
 
     except Exception as e:
@@ -443,13 +449,15 @@ def main():
     h, w = final_img.shape[:2] if final_img is not None else (0, 0)
 
     # =====================================================================
-    # STEP 4 – Digitize ECG (Extract Signals to NPZ)
+    # STEP 4 â€“ Digitize ECG (Extract Signals to NPZ)
     # =====================================================================
     print("\n" + "=" * 60)
     print("STEP 4: Digitize ECG (Extract Signals to NPZ)")
     print("=" * 60)
 
     npz_mv_path = None
+    validation_payload = None
+    digitization_calibration = None
     try:
         import numpy as np
         from scipy.signal import find_peaks
@@ -493,35 +501,28 @@ def main():
         baselines = [float(p) for p in peaks]
         print(f"Detected baselines: {baselines}")
 
-        # --- Grid Detection (px_per_mm) ---
-        hist_vals  = np.bincount(gray.astype(np.uint8).ravel())
-        paper_tone = int(np.argmax(hist_vals[180:]) + 180) if len(hist_vals) > 180 else 240
-        GRID_HI    = paper_tone - 2
-        GRID_LO    = paper_tone - 40
-        grid_mask = ((gray >= GRID_LO) & (gray <= GRID_HI)).astype(np.float32)
-        col_proj  = grid_mask.sum(axis=0)
-        
-        n = len(col_proj)
-        p_arr = col_proj - col_proj.mean()
-        F = np.fft.rfft(p_arr, n=2*n)
-        acf = np.fft.irfft(F * np.conj(F))[:n].real
-        acf = acf / (acf[0] + 1e-9)
-        
-        mm_per_px  = 250.0 / w
-        px_per_mm_est  = 1.0 / mm_per_px
-        p_min_auto = max(10, int(px_per_mm_est * 0.8))
-        p_max_auto = min(150, int(px_per_mm_est * 8.0))
-        
-        search = acf[p_min_auto:p_max_auto+1]
-        acf_peaks, props = find_peaks(search, height=0.03)
-        if len(acf_peaks) > 0:
-            order = np.argsort(props['peak_heights'])[::-1]
-            best_period = acf_peaks[order[0]] + p_min_auto
-            # The detected period is the major grid box (5mm), so divide by 5
-            px_per_mm = float(round(best_period * 2) / 2) / 5.0
-        else:
-            px_per_mm = 20.0 # fallback
-        print(f"Detected px_per_mm: {px_per_mm}")
+        # --- Grid Detection (separate horizontal/vertical px per mm) ---
+        from ecg_grid_calibration import detect_grid_calibration
+
+        grid_calibration = detect_grid_calibration(final_img)
+        px_per_mm_x = grid_calibration.pixels_per_mm_x
+        px_per_mm_y = grid_calibration.pixels_per_mm_y
+        digitization_calibration = {
+            "pixels_per_mm_x": px_per_mm_x,
+            "pixels_per_mm_y": px_per_mm_y,
+            "major_grid_px_x": grid_calibration.x_axis.major_period_px,
+            "major_grid_px_y": grid_calibration.y_axis.major_period_px,
+            "confidence": grid_calibration.confidence,
+            "paper_tone": grid_calibration.paper_tone,
+            "mm_per_second": 25.0,
+            "mm_per_mv": 10.0,
+            "sampling_rate": 500.0,
+        }
+        print(
+            "Detected grid calibration: "
+            f"x={px_per_mm_x:.3f} px/mm, y={px_per_mm_y:.3f} px/mm, "
+            f"confidence={grid_calibration.confidence:.3f}"
+        )
 
         # 2. Save the segmentation mask and run digitizer on it
         out_dir = uploads_dir / "digitized" / run_id
@@ -537,7 +538,8 @@ def main():
         
         config = DigitizerConfig(
             edge_label_zone_fraction=0.12,
-            manual_px_per_mm=px_per_mm,
+            manual_px_per_mm_x=px_per_mm_x,
+            manual_px_per_mm_y=px_per_mm_y,
             manual_baselines=baselines
         )
         
@@ -564,6 +566,47 @@ def main():
         })
         return
 
+    # =====================================================================
+    # STEP 5 - Validate against dataset ground truth
+    # =====================================================================
+    if args.category and args.record_number and npz_mv_path:
+        print("\n" + "=" * 60)
+        print("STEP 5: Validate Extracted Signals")
+        print("=" * 60)
+        try:
+            from ecg_validation import ValidationPaths, parse_record_number, validate_signals
+
+            dataset_root = backend_dir.parent / "mendely ecg version 2 .npz files"
+            validation_payload = validate_signals(
+                npz_mv_path,
+                ValidationPaths(
+                    dataset_root=dataset_root,
+                    uploads_root=uploads_dir,
+                    run_id=run_id,
+                    category=args.category,
+                    record_number=parse_record_number(args.record_number),
+                ),
+            )
+
+            comparison_rel = uploads_relative_path(Path(validation_payload["comparison_image"]), uploads_dir)
+            validation_payload["comparison_image"] = comparison_rel
+            report_progress(
+                "validation",
+                {
+                    "image": comparison_rel,
+                    "category": validation_payload["category"],
+                    "recordNumber": validation_payload["record_number"],
+                },
+            )
+            print(f"Validation complete. Comparison plot -> {comparison_rel}")
+        except Exception as e:
+            write_result(str(result_path), {
+                "success": False,
+                "error": "Validation failed",
+                "details": str(e),
+            })
+            return
+
     write_result(str(result_path), {
         "success": True,
         "run_id": run_id,
@@ -572,13 +615,15 @@ def main():
         "processed_image": str(final_output),
         "cropped_image": str(cropped_path),
         "npz_file": npz_mv_path,
+        "validation": validation_payload,
+        "digitization_calibration": digitization_calibration,
         "message": "ECG pipeline and digitization completed successfully",
     })
 
     print("\n" + "=" * 60)
     print("Pipeline completed successfully!")
-    print(f"Result JSON → {result_path}")
-    print(f"Processed image → {final_output}")
+    print(f"Result JSON â†’ {result_path}")
+    print(f"Processed image â†’ {final_output}")
     print("=" * 60)
 
 

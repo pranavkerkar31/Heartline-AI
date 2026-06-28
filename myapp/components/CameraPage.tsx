@@ -1,501 +1,731 @@
 "use client";
+
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, Upload, CheckCircle, Info, X, Play } from "lucide-react";
+import {
+  AlertTriangle,
+  Camera,
+  CheckCircle,
+  Download,
+  Info,
+  Play,
+  RotateCcw,
+  Square,
+  Upload,
+  X,
+} from "lucide-react";
+
+type LeadMetric = {
+  lead: string;
+  your_pcc: number | null;
+  your_rmse: number | null;
+  your_snr: number | null;
+  offset_ms: number | null;
+  time_scale: number | null;
+  match_score: number | null;
+  samples: number;
+};
+
+type ExportRow = {
+  category: string;
+  record_number: number;
+  lead: string;
+  your_pcc: number | null;
+  your_rmse: number | null;
+  your_snr: number | null;
+};
+
+type ValidationSummary = {
+  lead_count: number;
+  mean_pcc: number | null;
+  mean_rmse: number | null;
+  mean_snr: number | null;
+};
+
+type ValidationResult = {
+  category: string;
+  record_number: number;
+  truth_npz_path: string;
+  comparison_image: string;
+  lead_metrics: LeadMetric[];
+  export_rows: ExportRow[];
+  summary: ValidationSummary;
+};
+
+type AnalysisResult = {
+  success: boolean;
+  run_id: string;
+  width: number;
+  height: number;
+  processed_image: string;
+  cropped_image: string;
+  npz_file: string;
+  validation?: ValidationResult;
+  message?: string;
+};
+
+type BatchRecord = {
+  runId: string;
+  category: string;
+  recordNumber: number;
+  validation: ValidationResult;
+};
+
+type ProgressEvent = {
+  type: string;
+  step?: string;
+  runId?: string;
+  image?: string;
+  category?: string | null;
+  recordNumber?: string | number | null;
+  error?: string;
+};
+
+type AttemptRef = {
+  category: string;
+  recordNumber: number;
+} | null;
+
+const CATEGORY_OPTIONS = ["HB", "MI", "Normal", "PMI"];
+
+const STEP_LABELS: Record<string, string> = {
+  received: "Upload received",
+  orientation: "Orientation checked",
+  yolo: "Detection preview ready",
+  crop: "ECG cropped",
+  enhanced: "Image enhanced",
+  mask: "Waveform mask built",
+  digitized: "Signals reconstructed",
+  validation: "Validation complete",
+};
+
+function formatMetric(value: number | null, digits: number) {
+  return value == null || Number.isNaN(value) ? "--" : value.toFixed(digits);
+}
+
+function buildFileUrl(relativePath: string | null | undefined) {
+  if (!relativePath) return null;
+  const parts = relativePath.split("/").filter(Boolean).map(encodeURIComponent);
+  return `/api/files/${parts.join("/")}`;
+}
+
+function triggerDownload(contents: string, filename: string, mimeType: string) {
+  const blob = new Blob([contents], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
 
 export default function CameraPage() {
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [category, setCategory] = useState("MI");
+  const [rangeStart, setRangeStart] = useState("1");
+  const [rangeEnd, setRangeEnd] = useState("20");
+  const [batchStarted, setBatchStarted] = useState(false);
+  const [currentRecord, setCurrentRecord] = useState<number | null>(null);
+  const [batchEndRecord, setBatchEndRecord] = useState<number | null>(null);
+  const [completedRecords, setCompletedRecords] = useState<BatchRecord[]>([]);
+  const [selectedResultRunId, setSelectedResultRunId] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [analysisResult, setAnalysisResult] = useState<any>(null);
+  const [processingRunId, setProcessingRunId] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState("Set a category and range to begin validation.");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [progressImages, setProgressImages] = useState<Record<string, string>>({});
+  const [progressSteps, setProgressSteps] = useState<string[]>([]);
 
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const captureInputRef = useRef<HTMLInputElement>(null);
-  const stableFrames = useRef(0);
-  const rafIdRef = useRef<number | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const scanningRef = useRef(false);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+  const activeAttemptRef = useRef<AttemptRef>(null);
+  const processingRunIdRef = useRef<string | null>(null);
 
-  const [scanning, setScanning] = useState(false);
-  const [scanText, setScanText] = useState("Looking for ECG paper...");
+  const selectedRecord = useMemo(() => {
+    return completedRecords.find((record) => record.runId === selectedResultRunId) ?? completedRecords.at(-1) ?? null;
+  }, [completedRecords, selectedResultRunId]);
 
-  const apiBase = useMemo(() => {
-    // IMPORTANT: 127.0.0.1 points to the PHONE when opened on a phone.
-    // Set NEXT_PUBLIC_BACKEND_URL to something reachable from the phone (LAN IP + port, or tunnel URL).
-    return process.env.NEXT_PUBLIC_BACKEND_URL || "";
-  }, []);
+  const totalPlanned = useMemo(() => {
+    if (!batchStarted || currentRecord == null || batchEndRecord == null) return 0;
+    return batchEndRecord - Number(rangeStart) + 1;
+  }, [batchStarted, batchEndRecord, currentRecord, rangeStart]);
 
-  const stopCamera = () => {
-    scanningRef.current = false;
-    setScanning(false);
-    stableFrames.current = 0;
-
-    if (rafIdRef.current != null) {
-      cancelAnimationFrame(rafIdRef.current);
-      rafIdRef.current = null;
-    }
-
-    if (videoRef.current) {
-      try {
-        videoRef.current.pause();
-      } catch {}
-      videoRef.current.srcObject = null;
-    }
-
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    }
-  };
+  const batchRows = useMemo(() => {
+    return completedRecords.flatMap((record) => record.validation.export_rows);
+  }, [completedRecords]);
 
   useEffect(() => {
-    return () => stopCamera();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    const source = new EventSource("/api/events");
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    source.onmessage = (event) => {
+      const data = JSON.parse(event.data) as ProgressEvent;
+      const expectedAttempt = activeAttemptRef.current;
+
+      if (data.type === "start" && expectedAttempt) {
+        const incomingRecord = Number(data.recordNumber);
+        if (data.category === expectedAttempt.category && incomingRecord === expectedAttempt.recordNumber) {
+          processingRunIdRef.current = data.runId ?? null;
+          setProcessingRunId(data.runId ?? null);
+          setStatusMessage(`Processing ${expectedAttempt.category} ${expectedAttempt.recordNumber}...`);
+        }
+        return;
+      }
+
+      if (!data.runId || data.runId !== processingRunIdRef.current) return;
+
+      if (data.type === "progress" && data.step) {
+        const label = STEP_LABELS[data.step] ?? data.step;
+        setProgressSteps((prev) => (prev.includes(label) ? prev : [...prev, label]));
+        setStatusMessage(label);
+        if (data.image) {
+          setProgressImages((prev) => ({ ...prev, [data.step!]: data.image! }));
+        }
+      }
+
+      if (data.type === "cancelled") {
+        setStatusMessage(`Cancelled ${category} ${currentRecord ?? ""}. Ready to retry the same record.`);
+        setIsProcessing(false);
+        processingRunIdRef.current = null;
+        setProcessingRunId(null);
+        activeAttemptRef.current = null;
+      }
+
+      if (data.type === "error") {
+        setErrorMessage(data.error ?? "Processing failed.");
+      }
+    };
+
+    source.onerror = () => {
+      setStatusMessage((prev) => prev || "Live progress is temporarily unavailable.");
+    };
+
+    return () => source.close();
+  }, [category, currentRecord, processingRunId]);
+
+  const handleImageSelection = (file: File | null) => {
     if (!file) return;
-
     setUploadedFile(file);
+    setErrorMessage(null);
     const reader = new FileReader();
-    reader.onload = (ev) => setUploadedImage(ev.target?.result as string);
+    reader.onload = (event) => setUploadedImage(event.target?.result as string);
     reader.readAsDataURL(file);
   };
 
-  const handleCapturePhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
-    // Same as upload, but intended for mobile camera capture fallback
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setUploadedFile(file);
-    const reader = new FileReader();
-    reader.onload = (ev) => setUploadedImage(ev.target?.result as string);
-    reader.readAsDataURL(file);
-
-    // allow taking the same filename twice (iOS/Android)
-    e.target.value = "";
+  const handleFileInput = (event: React.ChangeEvent<HTMLInputElement>) => {
+    handleImageSelection(event.target.files?.[0] ?? null);
+    event.target.value = "";
   };
 
   const handleClearImage = () => {
     setUploadedImage(null);
     setUploadedFile(null);
-    setAnalysisResult(null);
   };
 
-  const startCameraScan = async () => {
-  try {
-    // Many mobile browsers require a secure context for camera access.
-    // localhost is treated as secure, but a LAN IP over http is NOT.
-    if (!window.isSecureContext) {
-      // Fallback: open the phone's native camera via file input capture.
-      // This works on mobile over HTTP and still lets you upload + analyze.
-      captureInputRef.current?.click();
+  const startBatch = () => {
+    const start = Number(rangeStart);
+    const end = Number(rangeEnd);
+
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start <= 0 || end < start) {
+      setErrorMessage("Enter a valid inclusive range such as 34 to 55.");
       return;
     }
 
-    // Check if browser supports camera
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      alert("Camera not supported in this browser");
-      return;
-    }
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: "environment" } },
-      audio: false,
-    });
-
-    if (videoRef.current) {
-      stopCamera();
-      streamRef.current = stream;
-      videoRef.current.srcObject = stream;
-      // iOS Safari: ensure metadata is loaded before play and canvas sizing.
-      await new Promise<void>((resolve) => {
-        const v = videoRef.current!;
-        if (v.readyState >= 1) return resolve();
-        v.onloadedmetadata = () => resolve();
-      });
-      await videoRef.current.play();
-      setScanning(true);
-      scanningRef.current = true;
-      rafIdRef.current = requestAnimationFrame(scanLoop);
-    }
-
-  } catch (error) {
-    console.error("Camera access error:", error);
-    alert("Unable to access camera. Please allow camera permission.");
-  }
-};
-
-  const scanLoop = async () => {
-    if (!videoRef.current || !canvasRef.current || !scanningRef.current) return;
-
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d")!;
-
-    const vw = video.videoWidth || 0;
-    const vh = video.videoHeight || 0;
-    if (!vw || !vh) {
-      rafIdRef.current = requestAnimationFrame(scanLoop);
-      return;
-    }
-
-    canvas.width = vw;
-    canvas.height = vh;
-
-    ctx.drawImage(video, 0, 0);
-
-    const blob = await new Promise<Blob>((res) =>
-      canvas.toBlob((b) => res(b!), "image/jpeg")
-    );
-
-    try {
-      if (!apiBase) {
-        // Still keep scanning preview even if backend URL isn't configured.
-        setScanText("Set NEXT_PUBLIC_BACKEND_URL to enable auto-detect...");
-        stableFrames.current = 0;
-      } else {
-      const form = new FormData();
-      form.append("file", blob);
-
-      const r = await fetch(`${apiBase}/detect-paper`, {
-        method: "POST",
-        body: form,
-      });
-
-      const data = await r.json();
-
-      if (!data.found) {
-        stableFrames.current = 0;
-        setScanText("Looking for ECG paper...");
-      } else {
-        setScanText("Hold steady...");
-        stableFrames.current++;
-
-        ctx.strokeStyle = "lime";
-        ctx.lineWidth = 4;
-        ctx.beginPath();
-        data.corners.forEach(([x, y]: number[], i: number) => {
-          i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-        });
-        ctx.closePath();
-        ctx.stroke();
-
-        if (stableFrames.current >= 10) {
-          captureFinal(blob);
-          return;
-        }
-      }
-      }
-    } catch (error) {
-      console.error("Detection error:", error);
-    }
-
-    rafIdRef.current = requestAnimationFrame(scanLoop);
+    setBatchStarted(true);
+    setCurrentRecord(start);
+    setBatchEndRecord(end);
+    setCompletedRecords([]);
+    setSelectedResultRunId(null);
+    setUploadedImage(null);
+    setUploadedFile(null);
+    setProgressImages({});
+    setProgressSteps([]);
+    processingRunIdRef.current = null;
+    setProcessingRunId(null);
+    setIsProcessing(false);
+    setErrorMessage(null);
+    setStatusMessage(`Batch ready. Current target: ${category} ${start}.`);
   };
 
-  const captureFinal = async (blob: Blob) => {
-    scanningRef.current = false;
-    setScanning(false);
+  const resetBatch = () => {
+    setBatchStarted(false);
+    setCurrentRecord(null);
+    setBatchEndRecord(null);
+    setCompletedRecords([]);
+    setSelectedResultRunId(null);
+    setUploadedImage(null);
+    setUploadedFile(null);
+    setProgressImages({});
+    setProgressSteps([]);
+    processingRunIdRef.current = null;
+    setProcessingRunId(null);
+    setIsProcessing(false);
+    setErrorMessage(null);
+    setStatusMessage("Set a category and range to begin validation.");
+    activeAttemptRef.current = null;
+  };
 
-    try {
-      if (!apiBase) {
-        alert("Backend URL not configured. Set NEXT_PUBLIC_BACKEND_URL and retry.");
-        stopCamera();
-        return;
-      }
-      const form = new FormData();
-      form.append("file", blob);
+  const retryLastCompleted = () => {
+    const last = completedRecords.at(-1);
+    if (!last || isProcessing) return;
 
-      const res = await fetch(`${apiBase}/upload`, {
-        method: "POST",
-        body: form,
-      });
-
-      const result = await res.json();
-      setAnalysisResult(result);
-
-      stopCamera();
-
-      alert("ECG captured and processed successfully!");
-    } catch (error) {
-      console.error("Capture error:", error);
-      alert("Failed to process image. Please try again.");
-      stopCamera();
-    }
+    setCompletedRecords((prev) => prev.slice(0, -1));
+    setCurrentRecord(last.recordNumber);
+    setSelectedResultRunId(completedRecords.at(-2)?.runId ?? null);
+    setUploadedImage(null);
+    setUploadedFile(null);
+    setProgressImages({});
+    setProgressSteps([]);
+    setStatusMessage(`Retry ${last.category} ${last.recordNumber} with a better capture.`);
   };
 
   const handleAnalysis = async () => {
-    if (!uploadedFile) return;
+    if (!uploadedFile) {
+      setErrorMessage("Capture or upload an ECG image first.");
+      return;
+    }
+    if (!batchStarted || currentRecord == null || batchEndRecord == null) {
+      setErrorMessage("Start a batch before running validation.");
+      return;
+    }
 
     setIsProcessing(true);
+    setErrorMessage(null);
+    setProcessingRunId(null);
+    setProgressImages({});
+    setProgressSteps([]);
+    setStatusMessage(`Uploading ${category} ${currentRecord}...`);
+    activeAttemptRef.current = { category, recordNumber: currentRecord };
+
     try {
       const formData = new FormData();
       formData.append("file", uploadedFile);
+      formData.append("category", category);
+      formData.append("recordNumber", String(currentRecord));
 
-      const res = await fetch("/api/upload", {
+      const response = await fetch("/api/upload", {
         method: "POST",
         body: formData,
       });
 
-      const result = await res.json();
-      setAnalysisResult(result);
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        if (result.cancelled) {
+          setStatusMessage(`Cancelled ${category} ${currentRecord}. Capture the same record again when ready.`);
+          handleClearImage();
+          return;
+        }
+        throw new Error(result.error || "Processing failed");
+      }
+
+      const analysis = result as AnalysisResult;
+      if (!analysis.validation) {
+        throw new Error("Validation output was missing from the response.");
+      }
+
+      const completedRecord: BatchRecord = {
+        runId: analysis.run_id,
+        category,
+        recordNumber: currentRecord,
+        validation: analysis.validation,
+      };
+
+      setCompletedRecords((prev) => [...prev, completedRecord]);
+      setSelectedResultRunId(analysis.run_id);
+      handleClearImage();
+
+      if (currentRecord >= batchEndRecord) {
+        setStatusMessage(`Batch complete. Processed ${category} ${rangeStart}-${batchEndRecord}.`);
+        setCurrentRecord(batchEndRecord + 1);
+      } else {
+        const nextRecord = currentRecord + 1;
+        setCurrentRecord(nextRecord);
+        setStatusMessage(`Validated ${category} ${currentRecord}. Next target: ${category} ${nextRecord}.`);
+      }
     } catch (error) {
-      console.error("Analysis error:", error);
-      alert("Failed to analyze image. Please try again.");
+      setErrorMessage(error instanceof Error ? error.message : "Failed to analyze image.");
+      setStatusMessage(`Validation for ${category} ${currentRecord} did not complete.`);
     } finally {
       setIsProcessing(false);
+      processingRunIdRef.current = null;
+      setProcessingRunId(null);
+      activeAttemptRef.current = null;
     }
   };
 
-  return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8">
-      {/* Capture/Upload Section */}
-      <div className="bg-white rounded-xl p-6 sm:p-8 shadow-sm border border-gray-200">
-        <h2 className="text-2xl font-semibold text-gray-900 mb-2">
-          Capture or Upload ECG
-        </h2>
-        <p className="text-gray-600 mb-6">
-          Start by capturing a photo or uploading an existing ECG image
-        </p>
+  const cancelCurrentRun = async () => {
+    if (!processingRunId || currentRecord == null) return;
 
-        {/* Camera Preview / Uploaded Image */}
-        <div className="border-2 border-dashed border-teal-300 rounded-xl p-4 sm:p-6 mb-6 bg-gray-50 relative">
-          {scanning ? (
-            <>
-              <video
-                ref={videoRef}
-                className="w-full h-auto rounded-lg"
-                playsInline
-                muted
-                autoPlay
-              />
-              <canvas
-                ref={canvasRef}
-                className="absolute top-4 left-4 right-4 bottom-4 w-[calc(100%-2rem)] h-[calc(100%-2rem)] pointer-events-none"
-              />
-              <div className="absolute top-6 left-1/2 -translate-x-1/2 bg-black/70 text-white px-4 py-2 rounded-lg text-sm font-medium">
-                {scanText}
-              </div>
-            </>
-          ) : uploadedImage ? (
-            <div className="relative">
-              <img
-                src={uploadedImage}
-                alt="Uploaded ECG"
-                className="w-full h-auto rounded-lg"
-              />
-              <button
-                onClick={handleClearImage}
-                className="absolute top-2 right-2 bg-red-500 hover:bg-red-600 text-white p-2 rounded-full shadow-lg"
+    try {
+      await fetch("/api/cancel-run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ runId: processingRunId, category, recordNumber: currentRecord }),
+      });
+      handleClearImage();
+      setStatusMessage(`Cancelling ${category} ${currentRecord}...`);
+    } catch {
+      setErrorMessage("Could not cancel the current run.");
+    }
+  };
+
+  const downloadCsv = () => {
+    const header = ["category", "record_number", "lead", "your_pcc", "your_rmse", "your_snr"];
+    const lines = [header.join(",")];
+    for (const row of batchRows) {
+      lines.push(
+        [
+          row.category,
+          row.record_number,
+          row.lead,
+          row.your_pcc ?? "",
+          row.your_rmse ?? "",
+          row.your_snr ?? "",
+        ].join(",")
+      );
+    }
+    triggerDownload(lines.join("\n"), `${category}_${rangeStart}-${rangeEnd}_validation.csv`, "text/csv;charset=utf-8");
+  };
+
+  const downloadTxt = () => {
+    const lines = ["category	record_number	lead	your_pcc	your_rmse	your_snr"];
+    for (const row of batchRows) {
+      lines.push(
+        [
+          row.category,
+          row.record_number,
+          row.lead,
+          row.your_pcc ?? "",
+          row.your_rmse ?? "",
+          row.your_snr ?? "",
+        ].join("	")
+      );
+    }
+    triggerDownload(lines.join("\n"), `${category}_${rangeStart}-${rangeEnd}_validation.txt`, "text/plain;charset=utf-8");
+  };
+
+  const comparisonImageUrl = buildFileUrl(selectedRecord?.validation.comparison_image);
+  const currentTargetComplete = batchStarted && currentRecord != null && batchEndRecord != null && currentRecord > batchEndRecord;
+
+  return (
+    <div className="grid grid-cols-1 xl:grid-cols-[1.15fr_0.85fr] gap-6 lg:gap-8">
+      <div className="space-y-6">
+        <div className="bg-white rounded-xl p-6 sm:p-8 shadow-sm border border-gray-200">
+          <h2 className="text-2xl font-semibold text-gray-900 mb-2">Batch Validation Setup</h2>
+          <p className="text-gray-600 mb-6">Choose the dataset category and record range you want to validate against while scanning from your phone.</p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
+            <label className="block">
+              <span className="text-sm font-medium text-gray-700">Category</span>
+              <select
+                value={category}
+                onChange={(event) => setCategory(event.target.value)}
+                disabled={batchStarted && completedRecords.length > 0}
+                className="mt-2 w-full rounded-lg border border-gray-300 px-3 py-2 text-gray-900 focus:border-teal-500 focus:outline-none"
               >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          ) : (
-            <div className="border-2 border-dashed border-teal-400 rounded-lg p-8 sm:p-16 flex flex-col items-center justify-center">
-              <Camera className="w-16 h-16 text-gray-400 mb-4" />
-              <p className="text-gray-700 font-medium mb-1">Camera Preview</p>
-              <p className="text-gray-500 text-sm">
-                Position your ECG paper here
+                {CATEGORY_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="text-sm font-medium text-gray-700">Start</span>
+              <input
+                value={rangeStart}
+                onChange={(event) => setRangeStart(event.target.value)}
+                inputMode="numeric"
+                className="mt-2 w-full rounded-lg border border-gray-300 px-3 py-2 text-gray-900 focus:border-teal-500 focus:outline-none"
+              />
+            </label>
+            <label className="block">
+              <span className="text-sm font-medium text-gray-700">End</span>
+              <input
+                value={rangeEnd}
+                onChange={(event) => setRangeEnd(event.target.value)}
+                inputMode="numeric"
+                className="mt-2 w-full rounded-lg border border-gray-300 px-3 py-2 text-gray-900 focus:border-teal-500 focus:outline-none"
+              />
+            </label>
+          </div>
+
+          <div className="flex flex-wrap gap-3">
+            <button
+              onClick={startBatch}
+              className="bg-teal-500 hover:bg-teal-600 text-white px-5 py-2.5 rounded-lg font-medium transition-colors"
+            >
+              {batchStarted ? "Restart Batch" : "Start Batch"}
+            </button>
+            <button
+              onClick={resetBatch}
+              className="bg-white hover:bg-gray-50 text-gray-700 border border-gray-300 px-5 py-2.5 rounded-lg font-medium transition-colors"
+            >
+              Reset
+            </button>
+            <button
+              onClick={retryLastCompleted}
+              disabled={completedRecords.length === 0 || isProcessing}
+              className="bg-white hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400 text-gray-700 border border-gray-300 px-5 py-2.5 rounded-lg font-medium transition-colors flex items-center gap-2"
+            >
+              <RotateCcw className="w-4 h-4" />
+              Retry Last Record
+            </button>
+          </div>
+
+          <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="rounded-xl border border-teal-200 bg-teal-50 p-4">
+              <p className="text-sm text-teal-700">Current Target</p>
+              <p className="text-2xl font-semibold text-teal-950">
+                {currentTargetComplete ? "Done" : currentRecord != null ? `${category} ${currentRecord}` : "--"}
               </p>
+            </div>
+            <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+              <p className="text-sm text-gray-600">Completed</p>
+              <p className="text-2xl font-semibold text-gray-900">{completedRecords.length}</p>
+            </div>
+            <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+              <p className="text-sm text-gray-600">Planned</p>
+              <p className="text-2xl font-semibold text-gray-900">{totalPlanned || "--"}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl p-6 sm:p-8 shadow-sm border border-gray-200">
+          <h2 className="text-2xl font-semibold text-gray-900 mb-2">Capture Current ECG</h2>
+          <p className="text-gray-600 mb-6">The batch only advances after a successful validation. If you cancel a bad scan, the same record stays active.</p>
+
+          <div className="border-2 border-dashed border-teal-300 rounded-xl p-4 sm:p-6 mb-6 bg-gray-50 relative">
+            {uploadedImage ? (
+              <div className="relative">
+                <img src={uploadedImage} alt="Uploaded ECG" className="w-full h-auto rounded-lg" />
+                <button
+                  onClick={handleClearImage}
+                  className="absolute top-2 right-2 bg-red-500 hover:bg-red-600 text-white p-2 rounded-full shadow-lg"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            ) : (
+              <div className="border-2 border-dashed border-teal-400 rounded-lg p-8 sm:p-16 flex flex-col items-center justify-center">
+                <Camera className="w-16 h-16 text-gray-400 mb-4" />
+                <p className="text-gray-700 font-medium mb-1">Ready for {currentRecord != null ? `${category} ${currentRecord}` : "the next record"}</p>
+                <p className="text-gray-500 text-sm">Capture from your phone camera or upload an existing image.</p>
+              </div>
+            )}
+          </div>
+
+          <div className="bg-teal-50 border border-teal-200 rounded-lg p-4 mb-6 flex items-start gap-3">
+            <Info className="w-5 h-5 text-teal-600 mt-0.5 shrink-0" />
+            <p className="text-teal-800 text-sm">Keep the ECG flat, include the full sheet, and avoid glare. If this attempt looks bad, cancel it and recapture the same record.</p>
+          </div>
+
+          {errorMessage && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4 flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5 shrink-0" />
+              <p className="text-red-800 text-sm">{errorMessage}</p>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+            <button
+              onClick={() => captureInputRef.current?.click()}
+              className="bg-teal-500 hover:bg-teal-600 text-white px-6 py-3 rounded-lg font-medium flex items-center justify-center gap-2 transition-colors"
+            >
+              <Camera className="w-5 h-5" />
+              Capture Photo
+            </button>
+            <button
+              onClick={() => uploadInputRef.current?.click()}
+              className="bg-white hover:bg-gray-50 text-gray-700 border border-gray-300 px-6 py-3 rounded-lg font-medium flex items-center justify-center gap-2 transition-colors"
+            >
+              <Upload className="w-5 h-5" />
+              Upload Image
+            </button>
+          </div>
+
+          <input ref={captureInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFileInput} />
+          <input ref={uploadInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileInput} />
+
+          <div className="flex flex-wrap gap-3">
+            <button
+              onClick={handleAnalysis}
+              disabled={isProcessing || !uploadedFile || currentTargetComplete || !batchStarted}
+              className="bg-gray-900 hover:bg-gray-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white px-6 py-3 rounded-lg font-medium flex items-center gap-2 transition-colors"
+            >
+              <Play className="w-5 h-5" />
+              {isProcessing ? "Processing..." : `Validate ${currentRecord != null ? `${category} ${currentRecord}` : "Record"}`}
+            </button>
+            <button
+              onClick={cancelCurrentRun}
+              disabled={!isProcessing || !processingRunId}
+              className="bg-white hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400 text-gray-700 border border-gray-300 px-6 py-3 rounded-lg font-medium flex items-center gap-2 transition-colors"
+            >
+              <Square className="w-4 h-4" />
+              Cancel Current Run
+            </button>
+          </div>
+
+          <div className="mt-5 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+            <p className="text-sm text-gray-700">{statusMessage}</p>
+          </div>
+
+          {progressSteps.length > 0 && (
+            <div className="mt-5">
+              <p className="text-sm font-medium text-gray-800 mb-3">Processing steps</p>
+              <div className="flex flex-wrap gap-2">
+                {progressSteps.map((step) => (
+                  <span key={step} className="inline-flex items-center rounded-full bg-teal-100 px-3 py-1 text-xs font-medium text-teal-800">
+                    {step}
+                  </span>
+                ))}
+              </div>
             </div>
           )}
         </div>
 
-        {/* Instruction */}
-        {!uploadedImage && !scanning && (
-          <div className="bg-teal-50 border border-teal-200 rounded-lg p-4 mb-6 flex items-start space-x-3">
-            <Info className="w-5 h-5 text-teal-600 mt-0.5 shrink-0" />
-            <p className="text-teal-800 text-sm">
-              Align the ECG paper horizontally within the frame
-            </p>
-          </div>
-        )}
+        {selectedRecord && (
+          <div className="bg-white rounded-xl p-6 sm:p-8 shadow-sm border border-gray-200">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <div>
+                <h2 className="text-2xl font-semibold text-gray-900">Validation Output</h2>
+                <p className="text-gray-600">Lead-wise comparison for {selectedRecord.category} {selectedRecord.recordNumber}</p>
+              </div>
+              <div className="text-sm text-gray-600">
+                Mean PCC {formatMetric(selectedRecord.validation.summary.mean_pcc, 3)} | Mean RMSE {formatMetric(selectedRecord.validation.summary.mean_rmse, 3)} | Mean SNR {formatMetric(selectedRecord.validation.summary.mean_snr, 2)}
+              </div>
+            </div>
 
-        {/* Action Buttons */}
-        {!uploadedImage && !scanning ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <button
-              onClick={startCameraScan}
-              className="bg-teal-500 hover:bg-teal-600 text-white px-6 py-3 rounded-lg font-medium flex items-center justify-center space-x-2 cursor-pointer transition-colors"
-            >
-              <Camera className="w-5 h-5" />
-              <span>Start Camera</span>
-            </button>
-            <label className="bg-white hover:bg-gray-50 text-gray-700 border border-gray-300 px-6 py-3 rounded-lg font-medium flex items-center justify-center space-x-2 cursor-pointer transition-colors">
-              <Upload className="w-5 h-5" />
-              <span>Upload Image</span>
-              <input
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={handleImageUpload}
-              />
-            </label>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200 text-left text-gray-600">
+                    <th className="py-3 pr-4 font-medium">Lead</th>
+                    <th className="py-3 pr-4 font-medium">Your PCC</th>
+                    <th className="py-3 pr-4 font-medium">Your RMSE</th>
+                    <th className="py-3 pr-4 font-medium">Your SNR</th>
+                    <th className="py-3 pr-4 font-medium">Offset ms</th>
+                    <th className="py-3 pr-4 font-medium">Scale</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedRecord.validation.lead_metrics.map((row) => (
+                    <tr key={`${selectedRecord.runId}-${row.lead}`} className="border-b border-gray-100 text-gray-800">
+                      <td className="py-3 pr-4 font-medium">{row.lead}</td>
+                      <td className="py-3 pr-4">{formatMetric(row.your_pcc, 3)}</td>
+                      <td className="py-3 pr-4">{formatMetric(row.your_rmse, 3)}</td>
+                      <td className="py-3 pr-4">{formatMetric(row.your_snr, 2)}</td>
+                      <td className="py-3 pr-4">{formatMetric(row.offset_ms, 0)}</td>
+                      <td className="py-3 pr-4">{formatMetric(row.time_scale, 3)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
-            {/* Hidden mobile camera capture fallback (triggered automatically on HTTP) */}
-            <input
-              ref={captureInputRef}
-              type="file"
-              accept="image/*"
-              capture="environment"
-              className="hidden"
-              onChange={handleCapturePhoto}
-            />
-          </div>
-        ) : uploadedImage ? (
-          <div className="space-y-3">
-            <button
-              onClick={handleAnalysis}
-              disabled={isProcessing}
-              className="w-full bg-teal-500 hover:bg-teal-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-6 py-3 rounded-lg font-medium flex items-center justify-center space-x-2 shadow-md hover:shadow-lg transition-all"
-            >
-              {isProcessing ? (
-                <>
-                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                  <span>Processing...</span>
-                </>
-              ) : (
-                <>
-                  <Play className="w-5 h-5" />
-                  <span>Run Analysis</span>
-                </>
-              )}
-            </button>
-            {analysisResult && (
-              <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                <p className="text-green-800 font-medium mb-2">
-                  Analysis Complete!
-                </p>
-                <p className="text-sm text-green-700">
-                  Width: {analysisResult.width}px, Height:{" "}
-                  {analysisResult.height}px
-                </p>
+            {comparisonImageUrl && (
+              <div className="mt-6">
+                <p className="text-sm font-medium text-gray-800 mb-3">Debug waveform comparison</p>
+                <img src={comparisonImageUrl} alt="Waveform comparison" className="w-full rounded-xl border border-gray-200" />
               </div>
             )}
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                onClick={startCameraScan}
-                className="bg-white hover:bg-gray-50 text-gray-700 border border-gray-300 px-4 py-2 rounded-lg font-medium flex items-center justify-center space-x-2 text-sm transition-colors"
-              >
-                <Camera className="w-4 h-4" />
-                <span>Recapture</span>
-              </button>
-              <label className="bg-white hover:bg-gray-50 text-gray-700 border border-gray-300 px-4 py-2 rounded-lg font-medium flex items-center justify-center space-x-2 cursor-pointer text-sm transition-colors">
-                <Upload className="w-4 h-4" />
-                <span>Re-upload</span>
-                <input
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={handleImageUpload}
-                />
-              </label>
-            </div>
           </div>
-        ) : null}
+        )}
       </div>
 
-      {/* Guidelines Section */}
-      <div className="bg-white rounded-xl p-6 sm:p-8 shadow-sm border border-gray-200">
-        <h2 className="text-2xl font-semibold text-gray-900 mb-2">
-          Capture Guidelines
-        </h2>
-        <p className="text-gray-600 mb-6">
-          Follow these best practices for optimal results
-        </p>
-
-        <div className="space-y-5">
-          {/* Guideline 1 */}
-          <div className="flex items-start space-x-3">
-            <CheckCircle className="w-5 h-5 text-teal-500 mt-0.5 shrink-0" />
+      <div className="space-y-6">
+        <div className="bg-white rounded-xl p-6 sm:p-8 shadow-sm border border-gray-200">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
             <div>
-              <p className="font-medium text-gray-900">
-                Place ECG paper on a flat surface
-              </p>
-              <p className="text-sm text-gray-600">
-                Avoid wrinkles or folds in the paper
-              </p>
+              <h2 className="text-2xl font-semibold text-gray-900">Batch Results</h2>
+              <p className="text-gray-600">Download all completed validations after the range is done, or anytime during review.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={downloadCsv}
+                disabled={batchRows.length === 0}
+                className="bg-white hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400 text-gray-700 border border-gray-300 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors"
+              >
+                <Download className="w-4 h-4" />
+                CSV
+              </button>
+              <button
+                onClick={downloadTxt}
+                disabled={batchRows.length === 0}
+                className="bg-white hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400 text-gray-700 border border-gray-300 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors"
+              >
+                <Download className="w-4 h-4" />
+                TXT
+              </button>
             </div>
           </div>
 
-          {/* Guideline 2 */}
-          <div className="flex items-start space-x-3">
-            <CheckCircle className="w-5 h-5 text-teal-500 mt-0.5 shrink-0" />
-            <div>
-              <p className="font-medium text-gray-900">
-                Capture image in landscape orientation
-              </p>
-              <p className="text-sm text-gray-600">
-                Horizontal format works best
-              </p>
+          {completedRecords.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-gray-300 p-6 text-sm text-gray-500">
+              Completed records will appear here as each scan is validated. Export files include the requested columns only: lead, your PCC, your RMSE, and your SNR, plus category and record number for batch tracking.
             </div>
-          </div>
-
-          {/* Guideline 3 */}
-          <div className="flex items-start space-x-3">
-            <CheckCircle className="w-5 h-5 text-teal-500 mt-0.5 shrink-0" />
-            <div>
-              <p className="font-medium text-gray-900">
-                Ensure the full ECG sheet is visible
-              </p>
-              <p className="text-sm text-gray-600">
-                Include all 12 leads in the frame
-              </p>
+          ) : (
+            <div className="space-y-3">
+              {completedRecords.map((record) => (
+                <button
+                  key={record.runId}
+                  onClick={() => setSelectedResultRunId(record.runId)}
+                  className={`w-full text-left rounded-xl border px-4 py-3 transition-colors ${selectedResultRunId === record.runId ? "border-teal-500 bg-teal-50" : "border-gray-200 hover:bg-gray-50"}`}
+                >
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="font-medium text-gray-900">{record.category} {record.recordNumber}</p>
+                      <p className="text-sm text-gray-600">{record.validation.summary.lead_count} leads | mean PCC {formatMetric(record.validation.summary.mean_pcc, 3)}</p>
+                    </div>
+                    <CheckCircle className="w-5 h-5 text-teal-600" />
+                  </div>
+                </button>
+              ))}
             </div>
-          </div>
-
-          {/* Guideline 4 */}
-          <div className="flex items-start space-x-3">
-            <CheckCircle className="w-5 h-5 text-teal-500 mt-0.5 shrink-0" />
-            <div>
-              <p className="font-medium text-gray-900">
-                Keep the camera parallel to the paper
-              </p>
-              <p className="text-sm text-gray-600">
-                Avoid angled or tilted shots
-              </p>
-            </div>
-          </div>
-
-          {/* Guideline 5 */}
-          <div className="flex items-start space-x-3">
-            <CheckCircle className="w-5 h-5 text-teal-500 mt-0.5 shrink-0" />
-            <div>
-              <p className="font-medium text-gray-900">
-                Avoid strong shadows and glare
-              </p>
-              <p className="text-sm text-gray-600">
-                Use diffused lighting when possible
-              </p>
-            </div>
-          </div>
-
-          {/* Guideline 6 */}
-          <div className="flex items-start space-x-3">
-            <CheckCircle className="w-5 h-5 text-teal-500 mt-0.5 shrink-0" />
-            <div>
-              <p className="font-medium text-gray-900">Ensure good lighting</p>
-              <p className="text-sm text-gray-600">
-                Natural light or bright indoor lighting
-              </p>
-            </div>
-          </div>
+          )}
         </div>
 
-        {/* Pro Tip */}
-        <div className="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-start space-x-3">
-          <Info className="w-5 h-5 text-blue-600 mt-0.5 shrink-0" />
-          <div>
-            <p className="font-medium text-blue-900 mb-1">Pro Tip</p>
-            <p className="text-sm text-blue-800">
-              For best results, clean the ECG paper surface and ensure there are
-              no obstructions or annotations that might interfere with the
-              analysis.
-            </p>
+        <div className="bg-white rounded-xl p-6 sm:p-8 shadow-sm border border-gray-200">
+          <h2 className="text-2xl font-semibold text-gray-900 mb-2">Capture Guidelines</h2>
+          <p className="text-gray-600 mb-6">A few checks help the validator align the paper trace with the digital ground truth much more reliably.</p>
+
+          <div className="space-y-4 text-sm text-gray-700">
+            <div className="flex items-start gap-3">
+              <CheckCircle className="w-5 h-5 text-teal-500 mt-0.5 shrink-0" />
+              <p>Place the ECG sheet on a flat surface and keep all 12 leads fully visible.</p>
+            </div>
+            <div className="flex items-start gap-3">
+              <CheckCircle className="w-5 h-5 text-teal-500 mt-0.5 shrink-0" />
+              <p>Capture in landscape with the camera roughly parallel to the paper.</p>
+            </div>
+            <div className="flex items-start gap-3">
+              <CheckCircle className="w-5 h-5 text-teal-500 mt-0.5 shrink-0" />
+              <p>Avoid strong shadows, reflections, and clipped edges because they hurt signal extraction.</p>
+            </div>
+            <div className="flex items-start gap-3">
+              <Info className="w-5 h-5 text-blue-500 mt-0.5 shrink-0" />
+              <p>If a scan looks poor, cancel it before completion or use Retry Last Record right after completion to keep the same dataset index active.</p>
+            </div>
           </div>
+
+          {Object.keys(progressImages).length > 0 && (
+            <div className="mt-6">
+              <p className="text-sm font-medium text-gray-800 mb-3">Latest debug previews</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {Object.entries(progressImages).map(([step, relativePath]) => {
+                  const imageUrl = buildFileUrl(relativePath);
+                  if (!imageUrl) return null;
+                  return (
+                    <div key={step} className="rounded-lg border border-gray-200 overflow-hidden">
+                      <div className="px-3 py-2 bg-gray-50 text-xs font-medium text-gray-600 uppercase tracking-wide">{STEP_LABELS[step] ?? step}</div>
+                      <img src={imageUrl} alt={step} className="w-full h-auto" />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
