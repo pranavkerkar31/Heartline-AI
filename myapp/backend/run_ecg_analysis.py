@@ -556,6 +556,43 @@ def main():
             rel_digitized = f"digitized/{run_id}/ecg_npz_overlay.png"
             report_progress("digitized", {"image": rel_digitized, "npz": f"digitized/{run_id}/ecg_signals_mv.npz"})
 
+        # =====================================================================
+        # STEP 5 – Predict ECG Diseases
+        # =====================================================================
+        print("\n" + "=" * 60)
+        print("STEP 5: Predict ECG Diseases")
+        print("=" * 60)
+        
+        prediction_data = None
+        predict_script = backend_dir / "predict_digitized_ecg.py"
+        if predict_script.exists():
+            import subprocess
+            try:
+                cmd = [
+                    sys.executable,
+                    str(predict_script),
+                    "--digitized-path",
+                    str(out_dir)
+                ]
+                print(f"Running prediction: {' '.join(cmd)}")
+                subprocess.run(cmd, cwd=str(backend_dir), capture_output=True, text=True, check=True)
+                
+                pred_json_path = out_dir / "prediction_result.json"
+                if pred_json_path.exists():
+                    with open(pred_json_path, "r", encoding="utf-8") as f:
+                        prediction_data = json.load(f)
+                    print(f"Prediction successful: {prediction_data.get('predicted_disease')} with confidence {prediction_data.get('confidence')}")
+                    report_progress("predicted", {"prediction": prediction_data})
+                else:
+                    print("prediction_result.json was not created.")
+                    report_progress("predicted", {"error": "Prediction result file not found"})
+            except Exception as pe:
+                print(f"Prediction script failed: {pe}")
+                report_progress("predicted", {"error": f"Prediction script failed: {str(pe)}"})
+        else:
+            print("predict_digitized_ecg.py not found at", predict_script)
+            report_progress("predicted", {"error": "predict_digitized_ecg.py not found"})
+
     except Exception as e:
         write_result(str(result_path), {
             "success": False,
@@ -572,6 +609,7 @@ def main():
         "processed_image": str(final_output),
         "cropped_image": str(cropped_path),
         "npz_file": npz_mv_path,
+        "prediction": prediction_data,
         "message": "ECG pipeline and digitization completed successfully",
     })
 

@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { 
   Loader2, 
   CheckCircle2, 
@@ -9,20 +9,23 @@ import {
   Layers, 
   Activity,
   AlertCircle,
-  X,
-  HeartPulse,
-  type LucideIcon
+  X
 } from "lucide-react";
-import ECGReconstructionViewer from "./ECGReconstructionViewer";
 
 interface ProcessStep {
   id: string;
   label: string;
   status: "waiting" | "processing" | "complete" | "error";
   image?: string;
-  previewSrc?: string;
-  npz?: string;
-  icon: LucideIcon;
+  icon: any;
+}
+
+interface PredictionResult {
+  digitized_folder: string;
+  npz_path: string;
+  predicted_disease: string;
+  confidence: number;
+  probabilities: Record<string, number>;
 }
 
 interface Job {
@@ -30,11 +33,14 @@ interface Job {
   timestamp: number;
   steps: ProcessStep[];
   error?: string;
+  prediction?: PredictionResult;
 }
 
 export default function LiveFeed() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [selectedImage, setSelectedImage] = useState<{ src: string; label: string } | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
   // Close modal on Escape key press
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -75,7 +81,7 @@ export default function LiveFeed() {
             { id: "enhanced", label: "AI Enhancement", status: "waiting", icon: Layers },
             { id: "mask", label: "Segmentation", status: "waiting", icon: Activity },
             { id: "digitized", label: "Digitizer Output", status: "waiting", icon: CheckCircle2 },
-            { id: "reconstruction", label: "ECG Reconstruction", status: "waiting", icon: HeartPulse },
+            { id: "predicted", label: "Disease Prediction", status: "waiting", icon: Activity },
           ],
         };
         setJobs((prev) => [newJob, ...prev].slice(0, 5)); // Keep last 5 jobs
@@ -83,21 +89,13 @@ export default function LiveFeed() {
         setJobs((prev) => {
           return prev.map((job) => {
             if (job.runId === data.runId) {
-              const completedStepIndex = job.steps.findIndex(s => s.id === data.step);
-              const reconstructionStepIndex = job.steps.findIndex(s => s.id === "reconstruction");
               const newSteps = job.steps.map((step) => {
                 if (step.id === data.step) {
-                  return { ...step, status: "complete" as const, image: data.image, npz: data.npz };
-                }
-                if (data.step === "digitized" && step.id === "reconstruction" && data.npz) {
-                  return { ...step, status: "complete" as const, npz: data.npz };
+                  return { ...step, status: "complete" as const, image: data.image };
                 }
                 // Mark current and previous steps
                 const stepIndex = job.steps.findIndex(s => s.id === step.id);
-                const currentStepIndex =
-                  data.step === "digitized" && data.npz
-                    ? reconstructionStepIndex
-                    : completedStepIndex;
+                const currentStepIndex = job.steps.findIndex(s => s.id === data.step);
                 
                 if (stepIndex < currentStepIndex) {
                   return { ...step, status: "complete" as const };
@@ -107,7 +105,25 @@ export default function LiveFeed() {
                 }
                 return step;
               });
-              return { ...job, steps: newSteps };
+              const updatedJob = { ...job, steps: newSteps };
+              if (data.step === "predicted" && data.prediction) {
+                updatedJob.prediction = data.prediction;
+              }
+              return updatedJob;
+            }
+            return job;
+          });
+        });
+      } else if (data.type === "complete") {
+        setJobs((prev) => {
+          return prev.map((job) => {
+            if (job.runId === data.runId) {
+              const newSteps = job.steps.map((step) => ({ ...step, status: "complete" as const }));
+              return {
+                ...job,
+                steps: newSteps,
+                prediction: data.result?.prediction || job.prediction,
+              };
             }
             return job;
           });
@@ -121,7 +137,7 @@ export default function LiveFeed() {
             return job;
           });
         });
-        }
+      }
       } catch (e) {
         console.error("LiveFeed: Failed to parse message", e);
       }
@@ -129,21 +145,6 @@ export default function LiveFeed() {
 
     return () => eventSource.close();
   }, []);
-
-  const updateStepPreview = (runId: string, stepId: string, previewSrc: string) => {
-    setJobs((prev) =>
-      prev.map((job) =>
-        job.runId === runId
-          ? {
-              ...job,
-              steps: job.steps.map((step) =>
-                step.id === stepId ? { ...step, previewSrc } : step
-              ),
-            }
-          : job
-      )
-    );
-  };
 
   if (jobs.length === 0) {
     return (
@@ -195,10 +196,9 @@ export default function LiveFeed() {
 
           {/* Steps Grid */}
           <div className="p-6">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-8 gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-4">
               {job.steps.map((step) => {
                 const Icon = step.icon;
-                const previewSrc = step.previewSrc ?? (step.image ? `/api/files/${step.image}` : "");
                 return (
                   <div 
                     key={step.id} 
@@ -225,37 +225,23 @@ export default function LiveFeed() {
                     {/* Step Image */}
                     <div 
                       className={`mt-4 w-full aspect-square bg-white rounded-lg border border-gray-200 overflow-hidden relative group transition-all duration-300 ${
-                        previewSrc || step.npz
+                        step.image 
                           ? "cursor-zoom-in hover:border-teal-400 hover:shadow-md" 
                           : ""
                       }`}
                       onClick={() => {
-                        if (previewSrc) {
+                        if (step.image) {
                           setSelectedImage({
-                            src: previewSrc,
+                            src: `/api/files/${step.image}`,
                             label: step.label
                           });
                         }
                       }}
                     >
-                      {step.id === "reconstruction" && step.status === "complete" ? (
-                        <>
-                          <ECGReconstructionViewer
-                            runId={job.runId}
-                            onPreviewReady={(dataUrl) =>
-                              updateStepPreview(job.runId, step.id, dataUrl)
-                            }
-                          />
-                          <div className="absolute inset-0 bg-black/10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                            <div className="bg-white/90 backdrop-blur-sm p-1.5 rounded-lg shadow-sm">
-                              <Maximize2 className="w-4 h-4 text-gray-700" />
-                            </div>
-                          </div>
-                        </>
-                      ) : step.image ? (
+                      {step.image ? (
                         <>
                           <img 
-                            src={previewSrc} 
+                            src={`/api/files/${step.image}`} 
                             alt={step.label}
                             className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
                           />
@@ -280,6 +266,87 @@ export default function LiveFeed() {
                 );
               })}
             </div>
+
+            {/* AI Diagnosis Card */}
+            {job.prediction && (
+              <div className="mt-6 p-5 bg-gray-50 border border-gray-100 rounded-xl animate-in slide-in-from-bottom-4 duration-500">
+                <div className="flex items-center gap-2 mb-4 border-b border-gray-200/50 pb-2">
+                  <Activity className="w-5 h-5 text-red-500 animate-pulse" />
+                  <h3 className="text-base font-bold text-gray-800">
+                    AI Diagnostic Analysis Result
+                  </h3>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {/* Primary diagnosis */}
+                  <div className="md:col-span-1 p-4 bg-white rounded-lg border border-gray-200 shadow-sm flex flex-col justify-between">
+                    <div>
+                      <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider block">Primary Diagnosis</span>
+                      <div className={`text-xl font-black mt-1 tracking-tight ${
+                        job.prediction.predicted_disease === 'Normal' ? 'text-teal-600' : 'text-rose-600'
+                      }`}>
+                        {job.prediction.predicted_disease === 'Normal' ? 'Normal ECG' : 
+                         job.prediction.predicted_disease === 'HB' ? 'Heart Block (HB)' :
+                         job.prediction.predicted_disease === 'MI' ? 'Myocardial Infarction (MI)' :
+                         job.prediction.predicted_disease === 'PMI' ? 'Prior Myocardial Infarction (PMI)' : job.prediction.predicted_disease}
+                      </div>
+                    </div>
+                    
+                    <div className="mt-4">
+                      <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider block mb-1">Confidence Score</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-base font-bold text-gray-700">{(job.prediction.confidence * 100).toFixed(1)}%</span>
+                        <div className="flex-1 bg-gray-100 h-2 rounded-full overflow-hidden">
+                          <div 
+                            className={`h-full rounded-full ${
+                              job.prediction.predicted_disease === 'Normal' ? 'bg-teal-500' : 'bg-rose-500'
+                            }`}
+                            style={{ width: `${job.prediction.confidence * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Probabilities table/bars */}
+                  <div className="md:col-span-2 p-4 bg-white rounded-lg border border-gray-200 shadow-sm space-y-3">
+                    <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider block">Class Probability Distribution</span>
+                    <div className="space-y-2">
+                      {Object.entries(job.prediction.probabilities || {})
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([label, val]) => {
+                          const fullName = label === 'Normal' ? 'Normal ECG' :
+                                           label === 'HB' ? 'Heart Block (HB)' :
+                                           label === 'MI' ? 'Myocardial Infarction (MI)' :
+                                           label === 'PMI' ? 'Prior Myocardial Infarction (PMI)' : label;
+                          const isTop = label === job.prediction?.predicted_disease;
+                          return (
+                            <div key={label} className="space-y-1">
+                              <div className="flex justify-between text-xs">
+                                <span className={isTop ? "font-bold text-gray-700" : "text-gray-500"}>
+                                  {fullName} {isTop && "✨"}
+                                </span>
+                                <span className={isTop ? "font-bold text-gray-700" : "text-gray-500"}>
+                                  {(val * 100).toFixed(1)}%
+                                </span>
+                              </div>
+                              <div className="bg-gray-50 h-1.5 rounded-full overflow-hidden">
+                                <div 
+                                  className={`h-full rounded-full transition-all duration-500 ${
+                                    label === 'Normal' ? 'bg-teal-400' : 
+                                    isTop ? 'bg-rose-500' : 'bg-gray-300'
+                                  }`}
+                                  style={{ width: `${val * 100}%` }}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {job.error && (

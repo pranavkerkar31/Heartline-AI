@@ -10,7 +10,7 @@ backend/augmented_clahe/
 backend/yolo_ecg/crop_dataset/images/train
 backend/yolo_ecg/crop_dataset/images/val
 yolo_ecg/crop_dataset/
-
+myapp/backend/models/
 # Python
 __pycache__/
 *.py[cod]
@@ -59,3 +59,5 @@ Thumbs.db
 *.log
 
 
+#dataset 
+mendely ecg version 2 .npz files
