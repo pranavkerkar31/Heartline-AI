@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
 
     const resultPath = path.join(uploadsDir, `result_${runId}.json`);
     const scriptPath = path.join(backendDir, "run_ecg_analysis.py");
-    const venvPythonPath = path.join(process.cwd(), "..", "env", "Scripts", "python.exe");
+    const venvPythonPath = path.join(process.cwd(), "backend", "env", "Scripts", "python.exe");
     const args = [scriptPath, "--input", uploadPath, "--run-id", runId, "--result-path", resultPath];
 
     const trySpawnPython = (pythonCmd: string) =>
