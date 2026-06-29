@@ -59,6 +59,7 @@ backend/ECG_dataset/images/
 backend/perspective_corrected/
 backend/yolo_ecg/cropped_ecg/
 backend/preprocessing/output/
+backend/ecg_cnn_lstm_digitized_model.keras
 
 # Model weights
 *.pt

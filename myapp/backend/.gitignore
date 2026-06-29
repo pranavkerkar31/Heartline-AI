@@ -19,6 +19,7 @@ backend/input/
 yolo_ecg/crop_dataset/
 
 backend/target/
+backend/models/
 preprocessing/cropped_ecg/
 preprocessing/no_grid_ecg/
 preprocessing/processed_images/

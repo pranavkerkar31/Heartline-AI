@@ -5,9 +5,12 @@ Expected digitized folder contents:
   ecg_signals_mv.npz
   Lead_I.png, Lead_II.png, ...
 
-Usage:
+Usage from backend folder:
+  python predict_digitized_ecg.py
+
+Optional explicit usage:
   python predict_digitized_ecg.py ^
-    --digitized-path backend/outputs/a5340fea-c855-4cd9-8113-357796bb3064 ^
+    --digitized-path outputs/a5340fea-c855-4cd9-8113-357796bb3064 ^
     --model-path models/ecg_cnn_lstm_digitized_model.keras ^
     --class-names models/ecg_class_names.json
 
@@ -142,6 +145,44 @@ def find_digitized_npz_files(path: Path) -> list[Path]:
     return sorted(path.rglob("ecg_signals_mv.npz"))
 
 
+def find_default_model_path() -> Path:
+    preferred = Path("models") / "ecg_cnn_lstm_model.h5"
+    if preferred.exists():
+        return preferred
+
+    candidates = sorted(Path("models").glob("*.keras"))
+    if candidates:
+        return candidates[0]
+
+    candidates = sorted(Path(".").glob("*.keras"))
+    if candidates:
+        return candidates[0]
+
+    raise FileNotFoundError(
+        "Could not find a .keras model. Put it at "
+        "models/ecg_cnn_lstm_digitized_model.keras or pass --model-path."
+    )
+
+
+def find_default_class_names_path() -> Path:
+    preferred = Path("models") / "ecg_class_names.json"
+    if preferred.exists():
+        return preferred
+
+    candidates = sorted(Path("models").glob("*class*.json"))
+    if candidates:
+        return candidates[0]
+
+    candidates = sorted(Path(".").glob("*class*.json"))
+    if candidates:
+        return candidates[0]
+
+    raise FileNotFoundError(
+        "Could not find class names JSON. Put it at "
+        "models/ecg_class_names.json or pass --class-names."
+    )
+
+
 def load_class_names(class_names_path: Path) -> list[str]:
     with class_names_path.open("r", encoding="utf-8") as f:
         class_names = json.load(f)
@@ -212,18 +253,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--digitized-path",
-        required=True,
-        help="Path to one digitized folder, one ecg_signals_mv.npz file, or parent backend/outputs folder.",
+        default="outputs",
+        help="Path to one digitized folder, one ecg_signals_mv.npz file, or parent backend/outputs folder. Default: outputs",
     )
     parser.add_argument(
         "--model-path",
-        required=True,
-        help="Path to trained .keras model.",
+        default=None,
+        help="Path to trained .keras model. Default: auto-detect from models/*.keras",
     )
     parser.add_argument(
         "--class-names",
-        required=True,
-        help="Path to ecg_class_names.json saved during training.",
+        default=None,
+        help="Path to ecg_class_names.json saved during training. Default: auto-detect from models/ecg_class_names.json",
     )
     parser.add_argument(
         "--lead-order",
@@ -243,8 +284,8 @@ def main() -> None:
     args = parse_args()
 
     digitized_path = Path(args.digitized_path)
-    model_path = Path(args.model_path)
-    class_names_path = Path(args.class_names)
+    model_path = Path(args.model_path) if args.model_path else find_default_model_path()
+    class_names_path = Path(args.class_names) if args.class_names else find_default_class_names_path()
 
     if not digitized_path.exists():
         raise FileNotFoundError(f"Digitized path not found: {digitized_path}")
