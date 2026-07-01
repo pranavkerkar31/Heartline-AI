@@ -6,6 +6,7 @@ import { spawn } from "child_process";
 import { eventBus } from "@/lib/events";
 import { runRegistry } from "@/lib/runRegistry";
 import { validationBatchManager } from "@/lib/validationBatch";
+const simpleThreadPool = require("@/lib/simpleThreadPool");
 
 type UploadLike = Blob & {
   arrayBuffer(): Promise<ArrayBuffer>;
@@ -92,9 +93,11 @@ export async function POST(req: NextRequest) {
         });
 
         runRegistry.register(runId, child);
+        simpleThreadPool.registerProcess(runId, child);
 
         child.on("error", (err) => {
           runRegistry.unregister(runId);
+          simpleThreadPool.unregisterProcess(runId);
           if (!resolved) {
             resolved = true;
             resolve({ code: 1, stderrTail: String(err) });
@@ -127,6 +130,7 @@ export async function POST(req: NextRequest) {
 
         child.on("close", (code) => {
           runRegistry.unregister(runId);
+          simpleThreadPool.unregisterProcess(runId);
           if (!resolved) {
             resolved = true;
             resolve({ code: code ?? 1, stderrTail: stderrTail || stdoutTail });
@@ -147,6 +151,7 @@ export async function POST(req: NextRequest) {
     if (code !== 0) {
       const cancelled = runRegistry.wasCancelled(runId);
       runRegistry.clearCancelled(runId);
+      simpleThreadPool.cancelTask(runId);
       const batch = usesLiveBatch ? validationBatchManager.release(runId) : validationBatchManager.snapshot();
       const errorMessage = cancelled ? "Processing cancelled" : "ECG analysis failed";
       eventBus.emit({ type: cancelled ? "cancelled" : "error", runId, category, recordNumber, error: errorMessage });

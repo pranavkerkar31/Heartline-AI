@@ -1,21 +1,13 @@
-export const VALIDATION_CATEGORIES = ["HB", "MI", "Normal", "PMI"] as const;
-
-export type ValidationCategory = (typeof VALIDATION_CATEGORIES)[number];
-
-export interface ValidationBatchSnapshot {
-  category: ValidationCategory;
-  start: number;
-  end: number;
-  current: number;
-  activeRunId: string | null; // Kept for backward compatibility but not used
-  complete: boolean;
-}
+// JavaScript version of validationBatch for immediate use
+exports.VALIDATION_CATEGORIES = ["HB", "MI", "Normal", "PMI"];
 
 class ValidationBatchManager {
-  private batch: ValidationBatchSnapshot | null = null;
-  private currentRecordClaims: Set<string> = new Set();
+  constructor() {
+    this.batch = null;
+    this.currentRecordClaims = new Set();
+  }
 
-  configure(category: ValidationCategory, start: number, end: number) {
+  configure(category, start, end) {
     this.batch = { category, start, end, current: start, activeRunId: null, complete: false };
     this.currentRecordClaims.clear();
     return this.snapshot();
@@ -25,7 +17,7 @@ class ValidationBatchManager {
     return this.batch ? { ...this.batch } : null;
   }
 
-  claim(runId: string) {
+  claim(runId) {
     if (!this.batch) throw new Error("Configure a validation range in Live Monitor first.");
     if (this.batch.complete) throw new Error("The configured validation range is already complete.");
     
@@ -45,7 +37,7 @@ class ValidationBatchManager {
     return { category: this.batch.category, recordNumber };
   }
 
-  succeed(runId: string) {
+  succeed(runId) {
     if (!this.batch) return this.snapshot();
     
     // Remove this runId from current record claims
@@ -55,10 +47,10 @@ class ValidationBatchManager {
     return this.snapshot();
   }
 
-  release(runId: string) {
+  release(runId) {
     if (!this.batch) return this.snapshot();
     
-    if (this.batch.activeRunId === runId) {
+    if (this.batch?.activeRunId === runId) {
       this.batch.activeRunId = null;
     }
     this.currentRecordClaims.delete(runId);
@@ -71,10 +63,7 @@ class ValidationBatchManager {
   }
 }
 
-const globalForValidationBatch = globalThis as unknown as {
-  validationBatchManager: ValidationBatchManager | undefined;
-};
+const globalForValidationBatch = globalThis;
+globalForValidationBatch.validationBatchManager = globalForValidationBatch.validationBatchManager ?? new ValidationBatchManager();
 
-export const validationBatchManager =
-  globalForValidationBatch.validationBatchManager ?? new ValidationBatchManager();
-globalForValidationBatch.validationBatchManager = validationBatchManager;
+exports.validationBatchManager = globalForValidationBatch.validationBatchManager;

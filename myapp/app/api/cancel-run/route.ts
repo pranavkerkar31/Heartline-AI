@@ -2,6 +2,7 @@
 import { eventBus } from "@/lib/events";
 import { runRegistry } from "@/lib/runRegistry";
 import { validationBatchManager } from "@/lib/validationBatch";
+const simpleThreadPool = require("@/lib/simpleThreadPool");
 
 export async function POST(req: NextRequest) {
   try {
@@ -14,7 +15,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Missing runId" }, { status: 400 });
     }
 
-    const cancelled = runRegistry.cancel(runId);
+    const processCancelled = runRegistry.cancel(runId);
+    const threadCancelled = simpleThreadPool.cancelTask(runId);
+    const cancelled = processCancelled || threadCancelled;
     
     // Always release from batch if it was assigned, regardless of whether process was found
     const batch = validationBatchManager.release(runId);
