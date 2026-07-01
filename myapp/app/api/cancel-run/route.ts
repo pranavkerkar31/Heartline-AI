@@ -15,11 +15,16 @@ export async function POST(req: NextRequest) {
     }
 
     const cancelled = runRegistry.cancel(runId);
+    
+    // Always release from batch if it was assigned, regardless of whether process was found
+    const batch = validationBatchManager.release(runId);
+    
+    // Emit cancelled event only if we actually cancelled a running process
     if (cancelled) {
-      const batch = validationBatchManager.release(runId);
       eventBus.emit({ type: "cancelled", runId, category, recordNumber, timestamp: Date.now() });
-      eventBus.emit({ type: "batch", batch, timestamp: Date.now() });
     }
+
+    eventBus.emit({ type: "batch", batch, timestamp: Date.now() });
 
     return NextResponse.json({ success: cancelled, runId });
   } catch {

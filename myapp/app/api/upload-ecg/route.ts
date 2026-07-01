@@ -4,14 +4,30 @@ import fs from "fs/promises";
 import crypto from "crypto";
 import { spawn } from "child_process";
 import { eventBus } from "@/lib/events";
+import { runRegistry } from "@/lib/runRegistry";
+
+const corsHeaders = (origin: string = '*') => ({
+  'Access-Control-Allow-Origin': origin,
+  'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+});
+
+export async function OPTIONS() {
+  return NextResponse.json({}, { headers: corsHeaders() });
+}
 
 export async function POST(req: NextRequest) {
+  const origin = req.headers.get('origin') || '*';
+
   try {
     const data = await req.formData();
     const file = data.get("file");
 
     if (!file || !(file instanceof File)) {
-      return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
+      return NextResponse.json({ error: "No file uploaded" }, { 
+        status: 400, 
+        headers: corsHeaders(origin) 
+      });
     }
 
     // Convert image to buffer
@@ -23,6 +39,10 @@ export async function POST(req: NextRequest) {
     const uploadsDir = path.join(backendDir, "uploads");
 
     await fs.mkdir(uploadsDir, { recursive: true });
+    
+    // Default category and recordNumber to null for upload-ecg
+    const category = null;
+    const recordNumber = null;
 
     // Save under the original file name for backward-compatibility
     const originalUploadPath = path.join(uploadsDir, file.name);
@@ -34,7 +54,7 @@ export async function POST(req: NextRequest) {
     await fs.writeFile(uploadPath, buffer);
 
     // Notify listeners that a new upload has started
-    eventBus.emit({ type: "start", runId, timestamp: Date.now() });
+    eventBus.emit({ type: "start", runId, category, recordNumber, timestamp: Date.now() });
 
     const resultPath = path.join(uploadsDir, `result_${runId}.json`);
     const scriptPath = path.join(backendDir, "run_ecg_analysis.py");
@@ -52,7 +72,11 @@ export async function POST(req: NextRequest) {
           shell: false,
         });
 
+        // Register the process so it can be cancelled
+        runRegistry.register(runId, p);
+
         p.on("error", (err) => {
+          runRegistry.unregister(runId);
           if (!resolved) {
             resolved = true;
             resolve({ code: 1, stderrTail: String(err) });
@@ -84,6 +108,7 @@ export async function POST(req: NextRequest) {
         });
 
         p.on("close", (code) => {
+          runRegistry.unregister(runId);
           if (!resolved) {
             resolved = true;
             resolve({ code: code ?? 1, stderrTail: stderrTail || stdoutTail });
@@ -101,26 +126,34 @@ export async function POST(req: NextRequest) {
           })();
 
     if (code !== 0) {
-      eventBus.emit({ type: "error", runId, error: "ECG analysis failed" });
+      const cancelled = runRegistry.wasCancelled(runId);
+      runRegistry.clearCancelled(runId);
+      const errorMessage = cancelled ? "Processing cancelled" : "ECG analysis failed";
+      eventBus.emit({ type: cancelled ? "cancelled" : "error", runId, category, recordNumber, error: errorMessage });
       return NextResponse.json({
         success: false,
-        error: "ECG analysis failed",
+        cancelled,
+        runId,
+        error: errorMessage,
         details: stderrTail,
-      }, { status: 500 });
+      }, { status: cancelled ? 200 : 500, headers: corsHeaders(origin) });
     }
 
     const resultRaw = await fs.readFile(resultPath, "utf-8");
     const result = JSON.parse(resultRaw);
 
-    eventBus.emit({ type: "complete", runId, result });
+    eventBus.emit({ type: "complete", runId, category, recordNumber, result });
 
     return NextResponse.json({
       message: "File uploaded successfully",
       filename: file.name,
       ...result
-    });
+    }, { headers: corsHeaders(origin) });
   } catch (error: any) {
     console.error(error);
-    return NextResponse.json({ error: "Upload failed", details: error.message }, { status: 500 });
+    return NextResponse.json(
+      { error: "Upload failed", details: error.message }, 
+      { status: 500, headers: corsHeaders(origin) }
+    );
   }
 }

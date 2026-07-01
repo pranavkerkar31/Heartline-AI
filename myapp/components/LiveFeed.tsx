@@ -190,6 +190,8 @@ export default function LiveFeed() {
               job.runId === data.runId
                 ? {
                     ...job,
+                    category: data.category ?? job.category,
+                    recordNumber: data.recordNumber ?? job.recordNumber,
                     error: data.type === "cancelled" ? "Cancelled - same number ready to retry" : data.error,
                     cancelled: data.type === "cancelled",
                     steps: job.steps.map((step) =>
