@@ -146,7 +146,7 @@ def find_digitized_npz_files(path: Path) -> list[Path]:
 
 
 def find_default_model_path() -> Path:
-    preferred = Path("models") / "ecg_cnn_lstm_model.h5"
+    preferred = Path("models") / "ecg_seresnet1d.keras"
     if preferred.exists():
         return preferred
 
