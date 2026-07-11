@@ -84,8 +84,8 @@ def _resample_if_needed(x, src_fs, dst_fs):
 
 def _detect_anchor_peaks(feature, fs):
     distance = max(1, int(round(0.25 * fs)))
-    height = np.percentile(feature, 70)
-    prominence = max(0.25, np.percentile(feature, 85) - np.percentile(feature, 50))
+    height = np.percentile(feature, 72)
+    prominence = max(0.35, np.percentile(feature, 88) - np.percentile(feature, 50))
     peaks, _ = find_peaks(feature, height=height, distance=distance, prominence=prominence)
     return peaks
 
@@ -130,6 +130,27 @@ def _anchor_match_score(truth_peaks, paper_peaks, offset, scale, fs):
     return float(score), n_matches
 
 
+def _valid_overlap_fraction(valid):
+    if len(valid) == 0:
+        return 0.0
+    return float(np.count_nonzero(valid)) / float(len(valid))
+
+
+def _trim_edge_artifacts(x, fs):
+    """Suppress common digitizer edge spikes before alignment scoring."""
+    x = np.asarray(x, dtype=float).copy()
+    edge = min(len(x) // 8, max(1, int(round(0.12 * fs))))
+    if edge <= 0:
+        return x
+    inner = x[edge:-edge] if len(x) > 2 * edge else x
+    if len(inner) < 10:
+        return x
+    lo, hi = np.percentile(inner, [1, 99])
+    x[:edge] = np.clip(x[:edge], lo, hi)
+    x[-edge:] = np.clip(x[-edge:], lo, hi)
+    return x
+
+
 def _candidate_offsets_from_peaks(truth_peaks, paper_peaks, scale, n_truth, n_paper, step):
     offsets = []
     if len(truth_peaks) and len(paper_peaks):
@@ -143,9 +164,9 @@ def _candidate_offsets_from_peaks(truth_peaks, paper_peaks, scale, n_truth, n_pa
     return np.asarray(offsets, dtype=float)
 
 
-def _estimate_horizontal_alignment(truth, paper, fs, scale_min=0.95, scale_max=1.05):
-    truth_feat = _alignment_feature(truth, fs)
-    paper_feat = _alignment_feature(paper, fs)
+def _estimate_horizontal_alignment(truth, paper, fs, scale_min=0.95, scale_max=1.05, offset_prior=None):
+    truth_feat = _alignment_feature(_trim_edge_artifacts(truth, fs), fs)
+    paper_feat = _alignment_feature(_trim_edge_artifacts(paper, fs), fs)
     truth_peaks = _detect_anchor_peaks(truth_feat, fs)
     paper_peaks = _detect_anchor_peaks(paper_feat, fs)
 
@@ -159,18 +180,44 @@ def _estimate_horizontal_alignment(truth, paper, fs, scale_min=0.95, scale_max=1
         "valid": np.zeros(len(truth_feat), dtype=bool),
         "truth_peaks": truth_peaks,
         "paper_peaks": paper_peaks,
+        "overlap_fraction": 0.0,
     }
 
     offset_step = max(5, int(round(0.025 * fs)))
     scales = np.arange(scale_min, scale_max + 0.001, 0.002)
+    prior_center = None
+    prior_width = None
+    if offset_prior is not None:
+        prior_center, prior_width = offset_prior
+        prior_width = max(float(prior_width), float(offset_step))
 
     for scale in scales:
         offsets = _candidate_offsets_from_peaks(truth_peaks, paper_peaks, scale, len(truth_feat), len(paper_feat), offset_step)
+        if prior_center is not None:
+            prior_offsets = np.arange(prior_center - prior_width, prior_center + prior_width + offset_step, offset_step)
+            offsets = np.concatenate([offsets, prior_offsets])
         offsets = np.unique(np.round(offsets / offset_step) * offset_step)
         for offset in offsets:
             corr_score, valid, _ = _normalized_overlap_score(truth_feat, paper_feat, offset, scale)
+            if not np.isfinite(corr_score):
+                continue
             anchor_score, anchor_matches = _anchor_match_score(truth_peaks, paper_peaks, offset, scale, fs)
-            score = anchor_score + 0.35 * max(corr_score, -1.0)
+            overlap_fraction = _valid_overlap_fraction(valid)
+            anchor_quality = anchor_score / max(anchor_matches, 1)
+            offset_penalty = 0.22 * abs(offset) / fs
+            scale_penalty = 8.0 * abs(scale - 1.0)
+            prior_penalty = 0.0
+            if prior_center is not None:
+                prior_penalty = 0.80 * min(abs(offset - prior_center) / prior_width, 2.0)
+            score = (
+                1.85 * max(corr_score, -1.0)
+                + 0.55 * anchor_score
+                + 0.70 * anchor_quality
+                + 0.60 * overlap_fraction
+                - offset_penalty
+                - scale_penalty
+                - prior_penalty
+            )
             if score > best["score"]:
                 best.update(
                     score=score,
@@ -180,9 +227,42 @@ def _estimate_horizontal_alignment(truth, paper, fs, scale_min=0.95, scale_max=1
                     offset=float(offset),
                     scale=float(scale),
                     valid=valid,
+                    overlap_fraction=overlap_fraction,
                 )
 
     return best
+
+
+def _consensus_offset_prior(prepared_leads, fs):
+    offsets = []
+    weights = []
+    for prepared in prepared_leads.values():
+        horiz = prepared["initial_horiz"]
+        if not np.isfinite(horiz["score"]):
+            continue
+        if horiz["overlap_fraction"] < 0.55:
+            continue
+        weight = max(0.1, horiz["corr_score"] + 1.0)
+        weight += 0.25 * min(horiz["anchor_matches"], 4)
+        offsets.append(float(horiz["offset"]))
+        weights.append(float(weight))
+
+    if not offsets:
+        return None
+
+    offsets = np.asarray(offsets, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+    center = float(np.median(offsets))
+    for _ in range(3):
+        resid = np.abs(offsets - center)
+        width = max(0.20 * fs, float(np.percentile(resid, 70)) + 0.05 * fs)
+        keep = resid <= 2.5 * width
+        if keep.sum() == 0:
+            break
+        center = float(np.average(offsets[keep], weights=weights[keep]))
+
+    width = max(0.28 * fs, float(np.percentile(np.abs(offsets - center), 75)) + 0.10 * fs)
+    return center, min(width, 0.75 * fs)
 
 
 def _robust_vertical_fit(truth, paper_on_truth, valid):
@@ -221,14 +301,13 @@ def _robust_vertical_fit(truth, paper_on_truth, valid):
     return float(gain), float(offset), full_keep
 
 
-def _align_lead(truth_raw, paper_raw, fs_truth, fs_paper):
-    paper_raw = _resample_if_needed(paper_raw, fs_paper, fs_truth)
-    truth_raw = _fill_nan(truth_raw)
-    paper_raw = _fill_nan(paper_raw)
-    truth_centered = _baseline_correct(truth_raw, fs_truth)
-    paper_centered = _baseline_correct(paper_raw, fs_truth)
+def _align_prepared_lead(truth_centered, paper_centered, fs_truth, horiz):
+    truth_centered = np.asarray(truth_centered, dtype=float)
+    paper_centered = np.asarray(paper_centered, dtype=float)
+    if not np.isfinite(horiz["score"]):
+        horiz = dict(horiz)
+        horiz.update(offset=0.0, scale=1.0)
 
-    horiz = _estimate_horizontal_alignment(truth_centered, paper_centered, fs_truth)
     truth_idx = np.arange(len(truth_centered), dtype=float)
     paper_pos = (truth_idx - horiz["offset"]) / horiz["scale"]
     valid = (paper_pos >= 0) & (paper_pos <= len(paper_centered) - 1)
@@ -254,18 +333,80 @@ def _align_lead(truth_raw, paper_raw, fs_truth, fs_paper):
         "corr_score": horiz["corr_score"],
         "anchor_score": horiz["anchor_score"],
         "anchor_matches": horiz["anchor_matches"],
+        "overlap_fraction": horiz.get("overlap_fraction", _valid_overlap_fraction(valid)),
         "gain": gain,
         "vertical_offset": v_offset,
         "rmse": rmse,
     }
 
 
+def _prepare_lead_alignment(truth_raw, paper_raw, fs_truth, fs_paper):
+    paper_raw = _resample_if_needed(paper_raw, fs_paper, fs_truth)
+    truth_raw = _fill_nan(truth_raw)
+    paper_raw = _fill_nan(paper_raw)
+    truth_centered = _baseline_correct(truth_raw, fs_truth)
+    paper_centered = _baseline_correct(paper_raw, fs_truth)
+    initial_horiz = _estimate_horizontal_alignment(truth_centered, paper_centered, fs_truth)
+    return {
+        "truth_centered": truth_centered,
+        "paper_centered": paper_centered,
+        "initial_horiz": initial_horiz,
+    }
+
+
+def _align_lead(truth_raw, paper_raw, fs_truth, fs_paper, offset_prior=None):
+    prepared = _prepare_lead_alignment(truth_raw, paper_raw, fs_truth, fs_paper)
+    horiz = (
+        _estimate_horizontal_alignment(
+            prepared["truth_centered"],
+            prepared["paper_centered"],
+            fs_truth,
+            offset_prior=offset_prior,
+        )
+        if offset_prior is not None
+        else prepared["initial_horiz"]
+    )
+    return _align_prepared_lead(prepared["truth_centered"], prepared["paper_centered"], fs_truth, horiz)
+
+
+def _align_shared_leads(truth_data, extr_data, shared_leads, fs_truth, fs_extr):
+    prepared = {}
+    for lead in shared_leads:
+        prepared[lead] = _prepare_lead_alignment(
+            truth_data[lead].astype(float),
+            extr_data[lead].astype(float),
+            fs_truth,
+            fs_extr,
+        )
+
+    prior = _consensus_offset_prior(prepared, fs_truth)
+    lead_results = {}
+    for lead, lead_prepared in prepared.items():
+        horiz = lead_prepared["initial_horiz"]
+        if prior is not None:
+            constrained = _estimate_horizontal_alignment(
+                lead_prepared["truth_centered"],
+                lead_prepared["paper_centered"],
+                fs_truth,
+                offset_prior=prior,
+            )
+            if constrained["score"] >= horiz["score"] - 0.25 or abs(constrained["offset"] - prior[0]) < abs(horiz["offset"] - prior[0]):
+                horiz = constrained
+        lead_results[lead] = _align_prepared_lead(
+            lead_prepared["truth_centered"],
+            lead_prepared["paper_centered"],
+            fs_truth,
+            horiz,
+        )
+        lead_results[lead]["consensus_offset_samples"] = prior[0] if prior is not None else None
+        lead_results[lead]["consensus_offset_width"] = prior[1] if prior is not None else None
+    return lead_results
+
+
 def _validation_metrics(result):
     truth = result["truth_centered"]
     paper = result["paper_aligned"]
-    mask = result["fit_mask"].copy()
-    if mask.sum() < 10:
-        mask = result["valid"] & np.isfinite(truth) & np.isfinite(paper)
+    mask = result["valid"] & np.isfinite(truth) & np.isfinite(paper)
 
     y_true = truth[mask]
     y_pred = paper[mask]
@@ -374,14 +515,13 @@ def validate_signals(extracted_path, paths):
         if canonical in truth_data.files and canonical in extr_data.files:
             shared_leads.append(canonical)
 
-    lead_results = {}
+    lead_results = _align_shared_leads(truth_data, extr_data, shared_leads, fs_truth, fs_extr)
     lead_metrics = []
     export_rows = []
 
     for lead in shared_leads:
-        result = _align_lead(truth_data[lead].astype(float), extr_data[lead].astype(float), fs_truth, fs_extr)
+        result = lead_results[lead]
         metrics = _validation_metrics(result)
-        lead_results[lead] = result
         lead_metrics.append(
             {
                 "lead": lead,
