@@ -7,14 +7,11 @@ import matplotlib.pyplot as plt
 
 class ECGImagePipeline:
     def __init__(self, input_dir, output_dir, scale_factor=2.0, 
-                 clahe_clip_limit=2.0, clahe_tile_size=(8, 8),
                  agcwd_alpha=0.5, save_intermediate=False):
         
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
         self.scale_factor = scale_factor
-        self.clahe_clip_limit = clahe_clip_limit
-        self.clahe_tile_size = clahe_tile_size
         self.agcwd_alpha = agcwd_alpha
         self.save_intermediate = save_intermediate
         
@@ -24,18 +21,10 @@ class ECGImagePipeline:
         # Create intermediate directories if needed
         if self.save_intermediate:
             self.upscaled_dir = self.output_dir / "intermediate_upscaled"
-            self.brightness_dir = self.output_dir / "intermediate_brightness"
             self.upscaled_dir.mkdir(parents=True, exist_ok=True)
-            self.brightness_dir.mkdir(parents=True, exist_ok=True)
         
         # Supported image formats
         self.supported_formats = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif']
-        
-        # CLAHE object
-        self.clahe = cv2.createCLAHE(
-            clipLimit=self.clahe_clip_limit, 
-            tileGridSize=self.clahe_tile_size
-        )
         
         self.stats = {'total': 0, 'success': 0, 'failed': 0}
     
@@ -46,15 +35,7 @@ class ECGImagePipeline:
         
         return cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_LANCZOS4)
     
-    def step2_brightness_clahe(self, img):
-        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-        h, s, v = cv2.split(hsv)
-        v_clahe = self.clahe.apply(v)
-        v_norm = cv2.normalize(v_clahe, None, 0, 255, cv2.NORM_MINMAX)
-        hsv_aug = cv2.merge([h, s, v_norm])
-        return cv2.cvtColor(hsv_aug, cv2.COLOR_HSV2BGR)
-    
-    def step3_contrast_agcwd(self, image):
+    def step2_contrast_agcwd(self, image):
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         h, s, v = cv2.split(hsv)
         
@@ -83,8 +64,8 @@ class ECGImagePipeline:
                 return False
             
             img_upscaled = self.step1_upscale(img)
-            img_brightness = self.step2_brightness_clahe(img_upscaled)
-            img_final = self.step3_contrast_agcwd(img_brightness)
+            # CLAHE brightness stage intentionally disabled; run AGCWD after upscaling.
+            img_final = self.step2_contrast_agcwd(img_upscaled)
             
             output_path = self.output_dir / image_path.name
             cv2.imwrite(str(output_path), img_final)
@@ -136,8 +117,6 @@ def main():
         input_dir=input_dir,
         output_dir=output_dir,
         scale_factor=2.0,
-        clahe_clip_limit=2.0,
-        clahe_tile_size=(8, 8),
         agcwd_alpha=0.5,
         save_intermediate=False
     )
