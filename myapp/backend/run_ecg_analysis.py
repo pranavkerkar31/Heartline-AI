@@ -412,7 +412,7 @@ def main():
             })
             return
 
-        print("Applying advanced enhancements (Upscale + CLAHE + AGCWD)...")
+        print("Applying advanced enhancements (Upscale + AGCWD)...")
         
         # Initialize pipeline (paths are dummy here as we use steps manually)
         pipeline = ECGImagePipeline(input_dir=uploads_dir, output_dir=uploads_dir)
@@ -420,11 +420,8 @@ def main():
         # Step 1: Advanced Upscale
         img_upscaled = pipeline.step1_upscale(cropped_img)
         
-        # Step 2: Brightness Adjustment (CLAHE)
-        img_brightness = pipeline.step2_brightness_clahe(img_upscaled)
-        
-        # Step 3: Contrast Enhancement (AGCWD)
-        img_final = pipeline.step3_contrast_agcwd(img_brightness)
+        # Step 2: Contrast Enhancement (AGCWD)
+        img_final = pipeline.step3_contrast_agcwd(img_upscaled)
         
         cv2.imwrite(str(final_output), img_final)
         print(f"Enhancements complete. Output → {final_output}")
