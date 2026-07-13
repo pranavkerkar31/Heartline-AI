@@ -146,7 +146,7 @@ def find_digitized_npz_files(path: Path) -> list[Path]:
 
 
 def find_default_model_path() -> Path:
-    preferred = Path("models") / "ecg_inceptiontime_balanced.keras"
+    preferred = Path("models") / "ecg_tcn_balanced.keras"
     if preferred.exists():
         return preferred
 
@@ -160,7 +160,7 @@ def find_default_model_path() -> Path:
 
     raise FileNotFoundError(
         "Could not find a .keras model. Put it at "
-        "models/ecg_inceptiontime_balanced.keras or pass --model-path."
+        "models/ecg_tcn_balanced.keras or pass --model-path."
     )
 
 
