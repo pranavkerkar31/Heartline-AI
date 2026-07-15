@@ -9,3 +9,5 @@ tqdm
 fastapi
 ultralytics
 pytesseract
+tensorflow
+scipy
