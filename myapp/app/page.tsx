@@ -47,22 +47,22 @@ export default function ECGDigitisation() {
               >
                 Live Monitor
               </button>
-              <button 
+              {/* <button 
                 onClick={() => setActiveTab("capture")}
                 className={`text-sm font-medium transition-colors ${activeTab === 'capture' ? 'text-teal-600 border-b-2 border-teal-600' : 'text-gray-500 hover:text-gray-900'}`}
               >
                 Simulator
-              </button>
+              </button> */}
             </nav>
 
-            <div className="flex items-center space-x-4">
+            {/* <div className="flex items-center space-x-4">
               <button className="text-gray-700 hover:text-gray-900 font-medium">
                 Login
               </button>
               <button className="bg-teal-500 hover:bg-teal-600 text-white px-4 py-2 rounded-lg font-medium flex items-center space-x-2">
                 <span>Sign Up</span>
               </button>
-            </div>
+            </div> */}
           </div>
         </div>
       </header>
