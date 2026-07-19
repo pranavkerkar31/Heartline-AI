@@ -412,7 +412,7 @@ def main():
             })
             return
 
-        print("Applying advanced enhancements (Upscale + CLAHE + AGCWD)...")
+        print("Applying advanced enhancements (Upscale + AGCWD)...")
         
         # Initialize pipeline (paths are dummy here as we use steps manually)
         pipeline = ECGImagePipeline(input_dir=uploads_dir, output_dir=uploads_dir)
@@ -420,11 +420,8 @@ def main():
         # Step 1: Advanced Upscale
         img_upscaled = pipeline.step1_upscale(cropped_img)
         
-        # Step 2: Brightness Adjustment (CLAHE)
-        img_brightness = pipeline.step2_brightness_clahe(img_upscaled)
-        
-        # Step 3: Contrast Enhancement (AGCWD)
-        img_final = pipeline.step3_contrast_agcwd(img_brightness)
+        # Step 2: Contrast Enhancement (AGCWD)
+        img_final = pipeline.step3_contrast_agcwd(img_upscaled)
         
         cv2.imwrite(str(final_output), img_final)
         print(f"Enhancements complete. Output → {final_output}")
@@ -575,17 +572,27 @@ def main():
                     str(out_dir)
                 ]
                 print(f"Running prediction: {' '.join(cmd)}")
-                subprocess.run(cmd, cwd=str(backend_dir), capture_output=True, text=True, check=True)
-                
-                pred_json_path = out_dir / "prediction_result.json"
-                if pred_json_path.exists():
-                    with open(pred_json_path, "r", encoding="utf-8") as f:
-                        prediction_data = json.load(f)
-                    print(f"Prediction successful: {prediction_data.get('predicted_disease')} with confidence {prediction_data.get('confidence')}")
-                    report_progress("predicted", {"prediction": prediction_data})
+                proc = subprocess.run(cmd, cwd=str(backend_dir), capture_output=True, text=True)
+
+                # Always log subprocess output to help debugging
+                if proc.stdout:
+                    print("Prediction stdout:\n", proc.stdout)
+                if proc.stderr:
+                    print("Prediction stderr:\n", proc.stderr)
+
+                if proc.returncode != 0:
+                    print(f"Prediction script exited with code {proc.returncode}")
+                    report_progress("predicted", {"error": "Prediction script failed", "returncode": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr})
                 else:
-                    print("prediction_result.json was not created.")
-                    report_progress("predicted", {"error": "Prediction result file not found"})
+                    pred_json_path = out_dir / "prediction_result.json"
+                    if pred_json_path.exists():
+                        with open(pred_json_path, "r", encoding="utf-8") as f:
+                            prediction_data = json.load(f)
+                        print(f"Prediction successful: {prediction_data.get('predicted_disease')} with confidence {prediction_data.get('confidence')}")
+                        report_progress("predicted", {"prediction": prediction_data})
+                    else:
+                        print("prediction_result.json was not created.")
+                        report_progress("predicted", {"error": "Prediction result file not found", "stdout": proc.stdout, "stderr": proc.stderr})
             except Exception as pe:
                 print(f"Prediction script failed: {pe}")
                 report_progress("predicted", {"error": f"Prediction script failed: {str(pe)}"})
